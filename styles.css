@@ -309,6 +309,17 @@ textarea {
   gap: 0.25rem;
 }
 
+.player-cell {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.discord-name {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.2;
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -426,6 +437,10 @@ tbody tr:last-child td {
 
 .empty-state {
   padding: 1.25rem;
+}
+
+.empty-state + .form-stack {
+  margin-top: 1rem;
 }
 
 .code-pill {

@@ -20,16 +20,17 @@ Before using this in production, change these Supabase settings:
 ## What It Does
 
 - Shows a `My Rooms` landing view for rooms this browser created or uploaded to
-- Lets users create rooms with a name, closing date, description, and optional per-user YAML limit
+- Lets users save an optional Discord username for this browser's cookie-bound profile
+- Lets users create rooms with a name, closing date, description, optional per-user YAML limit, and optional Discord username requirement
 - Uploads `.yaml`, `.yml`, or `.txt` files into a room
 - Splits combined `---`-delimited YAML uploads into individual room entries
 - Lists room YAMLs as one row per player document using the root `name` and `game` fields
 - Validates that each YAML has root `name`, root `game`, and a root section whose key matches the `game` value
-- Rejects duplicate player names inside a room with a `<name> is already present in this room.` error
+- Rejects duplicate player names inside a room unless the root `name` contains `{player}`, `{PLAYER}`, `{number}`, or `{NUMBER}`
 - Lets room creators edit the room name and closing time
-- Lets room creators delete any YAML in their room and delete the room itself
+- Lets room creators delete any YAML in their room before the room closes and delete the room itself
 - Lets uploaders delete only their own YAMLs, and only before the room closes
-- Sorts the room table by player or game and can filter to only the current browser's YAMLs
+- Sorts the room table by player or game, can filter to only the current browser's YAMLs, and can toggle saved Discord usernames next to player names
 - Downloads one YAML at a time, all YAMLs as a zip, or uploader bundles as a zip of `---`-joined files
 - Uses this separator when bundling YAMLs:
 
@@ -46,6 +47,9 @@ between each stored entry
 This is cookie-based capability control, not account auth.
 
 - Each browser gets an uploader token cookie
+- Optional Discord usernames are saved server-side against the uploader token hash derived from that cookie
+- Rooms can require a Discord username before upload; Supabase enforces this and stores the current Discord username on each YAML entry
+- Updating a profile to a non-empty Discord username updates that browser's existing YAML entries in open rooms; clearing the profile or closing a room does not erase usernames already saved on entries
 - Creating a room also creates a room-admin token cookie for that room
 - Only SHA-256 hashes of those tokens are stored in the database
 - Room creation, room updates, uploads, room deletion, and YAML deletion are enforced server-side in Supabase SQL functions
@@ -112,7 +116,7 @@ Archipelago YAML documents are stored as raw text instead of being parsed and re
 - multi-document YAML bundles
 - Archipelago-specific conventions layered on top of standard YAML
 
-If you already deployed the older schema, rerun `supabase/schema.sql`. This version moves the app tables/functions into the `api` schema, hardens function execution, adds room metadata fields, and adds `submission_id` plus `document_index`.
+If you already deployed the older schema, rerun `supabase/schema.sql`. This version moves the app tables/functions into the `api` schema, hardens function execution, adds room metadata fields, adds `submission_id` plus `document_index`, and adds cookie-bound Discord profile fields plus the optional room Discord requirement.
 
 ## Deployment Secret Notes
 

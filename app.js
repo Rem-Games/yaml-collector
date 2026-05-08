@@ -24,10 +24,13 @@ const state = {
   currentRoom: null,
   currentEntries: [],
   currentSubmissionCounts: new Map(),
+  profile: null,
+  profileNeedsDiscord: false,
   roomTable: {
     sortField: "player",
     sortDirection: "asc",
-    onlyMine: false
+    onlyMine: false,
+    showDiscord: false
   },
   pendingUploadRoom: null,
   renderToken: 0
@@ -286,6 +289,10 @@ function sanitizeFilenamePart(value, fallback = "yaml") {
   return cleaned || fallback;
 }
 
+function playerNameUsesUniquePlaceholder(playerName) {
+  return /\{(?:player|PLAYER|number|NUMBER)\}/.test(playerName);
+}
+
 function ensureUploaderToken() {
   let token = getCookie(UPLOADER_COOKIE);
   if (!token) {
@@ -366,7 +373,7 @@ async function fetchRoomsBySlugs(roomSlugs) {
 
   const uniqueSlugs = [...new Set(roomSlugs)].map(sanitizeSlug).filter(Boolean);
   const params = new URLSearchParams({
-    select: "slug,name,description,closes_at,yaml_limit,created_at",
+    select: "slug,name,description,closes_at,yaml_limit,require_discord_username,created_at",
     order: "closes_at.asc"
   });
   params.set("slug", `in.(${uniqueSlugs.join(",")})`);
@@ -385,11 +392,29 @@ async function fetchMyUploadedRoomSlugs() {
 
 async function fetchRoomInfo(roomSlug) {
   const params = new URLSearchParams({
-    select: "slug,name,description,closes_at,yaml_limit,created_at",
+    select: "slug,name,description,closes_at,yaml_limit,require_discord_username,created_at",
     slug: `eq.${roomSlug}`
   });
   const rows = await apiFetch(`/rest/v1/rooms?${params.toString()}`);
   return rows[0] || null;
+}
+
+async function fetchMyProfile() {
+  const uploaderHash = await ensureUploaderHash();
+  const params = new URLSearchParams({
+    select: "discord_username",
+    uploader_token_hash: `eq.${uploaderHash}`
+  });
+  const rows = await apiFetch(`/rest/v1/user_profiles?${params.toString()}`);
+  return rows[0] || { discord_username: "" };
+}
+
+async function saveMyProfile(discordUsername) {
+  const uploaderToken = ensureUploaderToken();
+  return rpc("upsert_user_profile", {
+    p_uploader_token: uploaderToken,
+    p_discord_username: discordUsername
+  });
 }
 
 function extractRootScalar(content, key) {
@@ -422,7 +447,7 @@ function extractRootScalar(content, key) {
 
 async function fetchRoomEntries(roomSlug) {
   const params = new URLSearchParams({
-    select: "id,label,original_filename,content,created_at,uploader_token_hash,submission_id,document_index,player_name,game_name",
+    select: "id,label,original_filename,content,created_at,uploader_token_hash,submission_id,document_index,player_name,game_name,discord_username",
     room_slug: `eq.${roomSlug}`
   });
   const rows = await apiFetch(`/rest/v1/yaml_entries?${params.toString()}`);
@@ -432,6 +457,7 @@ async function fetchRoomEntries(roomSlug) {
       document_index: entry.document_index || 1,
       player: entry.player_name || extractRootScalar(entry.content, "name") || "Unknown Player",
       game: entry.game_name || extractRootScalar(entry.content, "game") || "Unknown Game",
+      discordUsername: entry.discord_username || "",
       isMine: entry.uploader_token_hash === state.uploaderTokenHash
     }))
     .sort((left, right) => {
@@ -486,11 +512,13 @@ function validateYamlDocumentContent(content, existingNamesLower) {
   }
 
   const playerKey = playerName.toLowerCase();
-  if (existingNamesLower.has(playerKey)) {
+  if (!playerNameUsesUniquePlaceholder(playerName) && existingNamesLower.has(playerKey)) {
     throw new Error(`${playerName} is already present in this room.`);
   }
 
-  existingNamesLower.add(playerKey);
+  if (!playerNameUsesUniquePlaceholder(playerName)) {
+    existingNamesLower.add(playerKey);
+  }
 
   return {
     playerName,
@@ -590,10 +618,13 @@ function canUploadToRoom(room, roomEntries) {
 }
 
 function canDeleteEntry(entry, room) {
+  if (roomIsClosed(room)) {
+    return false;
+  }
   if (hasRoomAdminToken(room.slug)) {
     return true;
   }
-  return entry.isMine && !roomIsClosed(room);
+  return entry.isMine;
 }
 
 function getVisibleRoomEntries() {
@@ -658,7 +689,11 @@ function downloadText(text, filename) {
 function setActiveNav(routeName) {
   for (const button of NAV_LINKS) {
     button.classList.toggle("active", button.dataset.route === routeName);
-    button.classList.toggle("warning", button.dataset.route === "about" && !state.configReady);
+    button.classList.toggle(
+      "warning",
+      (button.dataset.route === "about" && !state.configReady) ||
+        (button.dataset.route === "profile" && state.profileNeedsDiscord)
+    );
   }
 }
 
@@ -669,6 +704,9 @@ function getRouteFromHash() {
   }
   if (hash === "create") {
     return { name: "create", roomSlug: null };
+  }
+  if (hash === "profile") {
+    return { name: "profile", roomSlug: null };
   }
   if (hash === "about") {
     return { name: "about", roomSlug: null };
@@ -748,6 +786,44 @@ function showConfirmModal({ title, message, confirmLabel, confirmClass = "danger
   );
 }
 
+function showDiscordRequiredModal() {
+  state.profileNeedsDiscord = true;
+  setActiveNav(state.route.name === "room" ? "rooms" : state.route.name);
+  showModal(
+    "Discord Username Required",
+    `
+      <div class="modal-stack">
+        <p class="content-copy">This room requires a Discord username before uploading. Set it on the highlighted Profile tab, then try the upload again.</p>
+        <div class="action-row">
+          <button id="go-profile-button" type="button">Open Profile</button>
+          <button id="discord-required-cancel" type="button" class="secondary">Cancel</button>
+        </div>
+      </div>
+    `,
+    () => {
+      document.querySelector("#discord-required-cancel").addEventListener("click", closeModal);
+      document.querySelector("#go-profile-button").addEventListener("click", () => {
+        closeModal();
+        navigateTo("profile");
+      });
+    }
+  );
+}
+
+async function roomRequiresMissingDiscord(room) {
+  if (!room?.require_discord_username) {
+    return false;
+  }
+
+  state.profile = await fetchMyProfile();
+  const discordUsername = String(state.profile?.discord_username || "").trim();
+  if (discordUsername) {
+    state.profileNeedsDiscord = false;
+    setActiveNav(state.route.name === "room" ? "rooms" : state.route.name);
+  }
+  return !discordUsername;
+}
+
 function attachRoomsPageEvents() {
   for (const button of document.querySelectorAll("[data-open-room]")) {
     button.addEventListener("click", () => navigateTo("room", button.dataset.openRoom));
@@ -770,6 +846,7 @@ function attachCreateRoomEvents() {
       const closingInput = String(formData.get("room-closing") || "").trim();
       const description = String(formData.get("room-description") || "").trim();
       const yamlLimitRaw = String(formData.get("yaml-limit") || "").trim();
+      const requireDiscordUsername = formData.get("require-discord-username") === "on";
 
       if (!roomName) {
         throw new Error("Room name is required.");
@@ -793,6 +870,7 @@ function attachCreateRoomEvents() {
         p_description: description,
         p_closes_at: closesAt,
         p_yaml_limit: yamlLimit,
+        p_require_discord_username: requireDiscordUsername,
         p_admin_token_hash: adminTokenHash
       });
 
@@ -803,6 +881,37 @@ function attachCreateRoomEvents() {
       navigateTo("room", room.slug);
     } catch (error) {
       showBanner(STATUS_BANNER, error.message || "Failed to create room.", true);
+    }
+  });
+}
+
+function attachProfilePageEvents() {
+  const form = document.querySelector("#profile-form");
+  if (!form) {
+    return;
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    clearBanner(STATUS_BANNER);
+
+    try {
+      const formData = new FormData(form);
+      const discordUsername = String(formData.get("discord-username") || "").trim();
+      if (discordUsername.length > 64) {
+        throw new Error("Discord username must be 64 characters or fewer.");
+      }
+
+      const savedProfile = await saveMyProfile(discordUsername);
+      state.profile = Array.isArray(savedProfile) ? savedProfile[0] : savedProfile;
+      if (String(state.profile?.discord_username || "").trim()) {
+        state.profileNeedsDiscord = false;
+        setActiveNav(state.route.name);
+      }
+      showBanner(STATUS_BANNER, "Profile saved.");
+      renderProfilePage();
+    } catch (error) {
+      showBanner(STATUS_BANNER, error.message || "Failed to save profile.", true);
     }
   });
 }
@@ -822,9 +931,17 @@ function attachRoomPageEvents() {
 
   const uploadButton = document.querySelector("#room-upload-button");
   if (uploadButton) {
-    uploadButton.addEventListener("click", () => {
-      state.pendingUploadRoom = uploadButton.dataset.roomSlug;
-      UPLOAD_INPUT.click();
+    uploadButton.addEventListener("click", async () => {
+      try {
+        if (await roomRequiresMissingDiscord(state.currentRoom)) {
+          showDiscordRequiredModal();
+          return;
+        }
+        state.pendingUploadRoom = uploadButton.dataset.roomSlug;
+        UPLOAD_INPUT.click();
+      } catch (error) {
+        showBanner(STATUS_BANNER, error.message || "Failed to check profile.", true);
+      }
     });
   }
 
@@ -843,6 +960,15 @@ function attachRoomPageEvents() {
     mineToggle.checked = state.roomTable.onlyMine;
     mineToggle.addEventListener("change", () => {
       state.roomTable.onlyMine = mineToggle.checked;
+      renderRoute();
+    });
+  }
+
+  const discordToggle = document.querySelector("#show-discord-toggle");
+  if (discordToggle) {
+    discordToggle.checked = state.roomTable.showDiscord;
+    discordToggle.addEventListener("change", () => {
+      state.roomTable.showDiscord = discordToggle.checked;
       renderRoute();
     });
   }
@@ -917,6 +1043,10 @@ async function openEditRoomModal() {
           <span>Closing Date</span>
           <input name="room-closing" type="datetime-local" required value="${escapeHtml(isoToLocalInput(room.closes_at))}">
         </label>
+        <label class="checkbox">
+          <input name="require-discord-username" type="checkbox" ${room.require_discord_username ? "checked" : ""}>
+          <span>Require Discord username to upload</span>
+        </label>
         <div class="action-row">
           <button type="submit">Save Changes</button>
           <button id="edit-room-cancel" type="button" class="secondary">Cancel</button>
@@ -931,6 +1061,7 @@ async function openEditRoomModal() {
         const formData = new FormData(event.currentTarget);
         const roomName = String(formData.get("room-name") || "").trim();
         const closesAt = localInputToIso(String(formData.get("room-closing") || "").trim());
+        const requireDiscordUsername = formData.get("require-discord-username") === "on";
         if (!roomName || !closesAt) {
           showBanner(STATUS_BANNER, "Room name and closing date are required.", true);
           return;
@@ -946,6 +1077,7 @@ async function openEditRoomModal() {
           p_room_slug: room.slug,
           p_name: roomName,
           p_closes_at: closesAt,
+          p_require_discord_username: requireDiscordUsername,
           p_room_admin_token_hash: adminTokenHash
         });
 
@@ -1021,6 +1153,11 @@ async function handleUploadSelection(files) {
 
   try {
     const room = state.currentRoom;
+    if (await roomRequiresMissingDiscord(room)) {
+      showDiscordRequiredModal();
+      return;
+    }
+
     if (!canUploadToRoom(room, state.currentEntries)) {
       throw new Error("This room is closed or you have reached the YAML limit.");
     }
@@ -1031,7 +1168,11 @@ async function handleUploadSelection(files) {
     }
 
     const preparedUploads = [];
-    const reservedNames = new Set(state.currentEntries.map((entry) => entry.player.toLowerCase()));
+    const reservedNames = new Set(
+      state.currentEntries
+        .filter((entry) => !playerNameUsesUniquePlaceholder(entry.player))
+        .map((entry) => entry.player.toLowerCase())
+    );
     for (const file of fileList) {
       const content = await file.text();
       const documents = splitYamlDocuments(content);
@@ -1107,7 +1248,8 @@ async function loadCurrentRoom(roomSlug) {
     state.roomTable = {
       sortField: "player",
       sortDirection: "asc",
-      onlyMine: false
+      onlyMine: false,
+      showDiscord: false
     };
   }
 
@@ -1130,6 +1272,9 @@ function renderRoomsPage() {
           }
           if (roomIsClosed(room)) {
             badges.push('<span class="badge">Closed</span>');
+          }
+          if (room.require_discord_username) {
+            badges.push('<span class="badge">Discord Required</span>');
           }
 
           return `
@@ -1191,6 +1336,10 @@ function renderCreateRoomPage() {
           <input name="yaml-limit" type="number" min="1" step="1" placeholder="Leave empty for no limit">
           <p class="field-help">If set, each browser cookie can only add that many YAML documents to this room.</p>
         </label>
+        <label class="checkbox">
+          <input name="require-discord-username" type="checkbox">
+          <span>Require Discord username to upload</span>
+        </label>
         <div class="action-row">
           <button type="submit">Create Room</button>
         </div>
@@ -1199,6 +1348,40 @@ function renderCreateRoomPage() {
   `;
 
   attachCreateRoomEvents();
+}
+
+function renderProfilePage() {
+  const discordUsername = state.profile?.discord_username || "";
+  const requiredHint = state.profileNeedsDiscord && !discordUsername
+    ? `
+        <div class="empty-state">
+          <p class="empty-copy">A room you tried to upload to requires a Discord username. Set it here before uploading.</p>
+        </div>
+      `
+    : "";
+
+  MAIN_VIEW.innerHTML = `
+    <section class="content-card hero-card">
+      <p class="eyebrow">Cookie Profile</p>
+      <h2 class="page-title">Profile</h2>
+      <p class="page-copy">Add an optional Discord username for this browser. Rooms can show it next to your player names when viewers enable the Discord display toggle.</p>
+    </section>
+    <section class="content-card">
+      ${requiredHint}
+      <form id="profile-form" class="form-stack">
+        <label class="field">
+          <span>Discord Username</span>
+          <input name="discord-username" maxlength="64" autocomplete="off" placeholder="username" value="${escapeHtml(discordUsername)}">
+          <p class="field-help">Saved server-side against this browser's uploader cookie. Leave blank to remove it.</p>
+        </label>
+        <div class="action-row">
+          <button type="submit">Save Profile</button>
+        </div>
+      </form>
+    </section>
+  `;
+
+  attachProfilePageEvents();
 }
 
 function renderAboutPage() {
@@ -1253,7 +1436,16 @@ function renderRoomPage() {
 
           return `
             <tr>
-              <td>${escapeHtml(entry.player)}</td>
+              <td>
+                <div class="player-cell">
+                  <span>${escapeHtml(entry.player)}</span>
+                  ${
+                    state.roomTable.showDiscord && entry.discordUsername
+                      ? `<span class="discord-name">${escapeHtml(entry.discordUsername)}</span>`
+                      : ""
+                  }
+                </div>
+              </td>
               <td>${escapeHtml(entry.game)}</td>
               <td>
                 <div class="inline-row">${actions.join("")}</div>
@@ -1314,6 +1506,7 @@ function renderRoomPage() {
             ? `<span class="badge">Limit: ${room.yaml_limit} per user</span>`
             : ""
         }
+        ${room.require_discord_username ? '<span class="badge">Discord Required</span>' : ""}
         ${closed ? '<span class="badge">Submissions Closed</span>' : ""}
       </div>
     </section>
@@ -1327,6 +1520,10 @@ function renderRoomPage() {
         <label class="checkbox">
           <input id="only-mine-toggle" type="checkbox">
           <span>Display only my YAMLs</span>
+        </label>
+        <label class="checkbox">
+          <input id="show-discord-toggle" type="checkbox">
+          <span>Show Discord usernames</span>
         </label>
       </div>
       <div class="table-wrap">
@@ -1368,7 +1565,12 @@ async function renderRoute() {
       renderAboutPage();
       return;
     }
-    renderUnavailablePage(state.route.name === "create" ? "Create Room" : "My Rooms");
+    const titleByRoute = {
+      create: "Create Room",
+      profile: "Profile",
+      rooms: "My Rooms"
+    };
+    renderUnavailablePage(titleByRoute[state.route.name] || "My Rooms");
     return;
   }
 
@@ -1384,6 +1586,19 @@ async function renderRoute() {
 
   if (state.route.name === "create") {
     renderCreateRoomPage();
+    return;
+  }
+
+  if (state.route.name === "profile") {
+    renderLoading("Profile");
+    state.profile = await fetchMyProfile();
+    if (String(state.profile?.discord_username || "").trim()) {
+      state.profileNeedsDiscord = false;
+    }
+    if (token !== state.renderToken) {
+      return;
+    }
+    renderProfilePage();
     return;
   }
 
