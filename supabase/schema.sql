@@ -1,4 +1,8 @@
-create extension if not exists pgcrypto;
+create schema if not exists extensions;
+
+create extension if not exists pgcrypto with schema extensions;
+
+alter extension pgcrypto set schema extensions;
 
 create schema if not exists api;
 
@@ -648,7 +652,7 @@ begin
     raise exception 'Discord username contains invalid characters.';
   end if;
 
-  v_uploader_token_hash := encode(digest(v_uploader_token, 'sha256'), 'hex');
+  v_uploader_token_hash := encode(extensions.digest(v_uploader_token, 'sha256'), 'hex');
 
   insert into api.user_profiles (uploader_token_hash, discord_username, updated_at)
   values (v_uploader_token_hash, v_discord_username, timezone('utc', now()))
