@@ -450,7 +450,7 @@ function extractRootScalar(content, key) {
 
 async function fetchRoomEntries(roomSlug) {
   const params = new URLSearchParams({
-    select: "id,label,original_filename,content,created_at,uploader_token_hash,submission_id,document_index,player_name,game_name,discord_username",
+    select: "id,label,original_filename,created_at,uploader_token_hash,submission_id,document_index,player_name,game_name,discord_username",
     room_slug: `eq.${roomSlug}`
   });
   const rows = await apiFetch(`/rest/v1/yaml_entries?${params.toString()}`);
@@ -458,8 +458,8 @@ async function fetchRoomEntries(roomSlug) {
     .map((entry) => ({
       ...entry,
       document_index: entry.document_index || 1,
-      player: entry.player_name || extractRootScalar(entry.content, "name") || "Unknown Player",
-      game: entry.game_name || extractRootScalar(entry.content, "game") || "Unknown Game",
+      player: entry.player_name || "Unknown Player",
+      game: entry.game_name || "Unknown Game",
       discordUsername: entry.discord_username || "",
       isMine: entry.uploader_token_hash === state.uploaderTokenHash
     }))
@@ -476,13 +476,66 @@ async function fetchRoomEntries(roomSlug) {
     });
 }
 
+async function fetchEntryContent(entryId) {
+  const entry = state.currentEntries.find((item) => item.id === entryId);
+  if (entry && "content" in entry) {
+    return entry.content;
+  }
+
+  const params = new URLSearchParams({
+    select: "content",
+    id: `eq.${entryId}`
+  });
+  const rows = await apiFetch(`/rest/v1/yaml_entries?${params.toString()}`);
+  if (!rows[0]) {
+    throw new Error("YAML entry was not found.");
+  }
+
+  const content = rows[0].content || "";
+  if (entry) {
+    entry.content = content;
+  }
+  return content;
+}
+
+async function hydrateEntryContents(entries) {
+  return Promise.all(
+    entries.map(async (entry) => ({
+      ...entry,
+      content: await fetchEntryContent(entry.id)
+    }))
+  );
+}
+
 async function fetchRoomMetaYaml(roomSlug) {
   const params = new URLSearchParams({
-    select: "room_slug,content,updated_at",
+    select: "room_slug,updated_at",
     room_slug: `eq.${roomSlug}`
   });
   const rows = await apiFetch(`/rest/v1/room_meta_yamls?${params.toString()}`);
   return rows[0] || null;
+}
+
+async function fetchMetaYamlContent() {
+  const metaYaml = state.currentMetaYaml;
+  if (!metaYaml) {
+    throw new Error("meta.yaml was not found.");
+  }
+  if ("content" in metaYaml) {
+    return metaYaml.content;
+  }
+
+  const params = new URLSearchParams({
+    select: "content",
+    room_slug: `eq.${metaYaml.room_slug}`
+  });
+  const rows = await apiFetch(`/rest/v1/room_meta_yamls?${params.toString()}`);
+  if (!rows[0]) {
+    throw new Error("meta.yaml was not found.");
+  }
+
+  metaYaml.content = rows[0].content || "";
+  return metaYaml.content;
 }
 
 function splitYamlDocuments(content) {
@@ -992,12 +1045,17 @@ function attachRoomPageEvents() {
 
   const downloadMetaButton = document.querySelector("#download-meta-yaml");
   if (downloadMetaButton) {
-    downloadMetaButton.addEventListener("click", () => {
+    downloadMetaButton.addEventListener("click", async () => {
       if (!state.currentMetaYaml) {
         return;
       }
-      downloadText(state.currentMetaYaml.content, metaYamlDownloadName());
-      showBanner(STATUS_BANNER, "meta.yaml download started.");
+      try {
+        const content = await fetchMetaYamlContent();
+        downloadText(content, metaYamlDownloadName());
+        showBanner(STATUS_BANNER, "meta.yaml download started.");
+      } catch (error) {
+        showBanner(STATUS_BANNER, error.message || "meta.yaml download failed.", true);
+      }
     });
   }
 
@@ -1028,14 +1086,23 @@ function attachRoomPageEvents() {
     button.addEventListener("click", () => nextSortDirection(button.dataset.sortField));
   }
 
+  for (const button of document.querySelectorAll("[data-view-entry]")) {
+    button.addEventListener("click", () => openEntryYamlModal(button.dataset.viewEntry));
+  }
+
   for (const button of document.querySelectorAll("[data-download-entry]")) {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       const entry = state.currentEntries.find((item) => item.id === button.dataset.downloadEntry);
       if (!entry) {
         return;
       }
-      downloadText(entry.content, entryDownloadName(entry));
-      showBanner(STATUS_BANNER, "YAML download started.");
+      try {
+        const content = await fetchEntryContent(entry.id);
+        downloadText(content, entryDownloadName(entry));
+        showBanner(STATUS_BANNER, "YAML download started.");
+      } catch (error) {
+        showBanner(STATUS_BANNER, error.message || "YAML download failed.", true);
+      }
     });
   }
 
@@ -1045,47 +1112,57 @@ function attachRoomPageEvents() {
 
   const downloadAllButton = document.querySelector("#download-all-yamls");
   if (downloadAllButton) {
-    downloadAllButton.addEventListener("click", () => {
-      const files = state.currentEntries.map((entry) => ({
-        name: entryDownloadName(entry),
-        content: entry.content,
-        modifiedAt: entry.created_at
-      }));
-      if (state.currentMetaYaml) {
-        files.unshift({
-          name: metaYamlDownloadName(),
-          content: state.currentMetaYaml.content,
-          modifiedAt: state.currentMetaYaml.updated_at
-        });
+    downloadAllButton.addEventListener("click", async () => {
+      try {
+        const entries = await hydrateEntryContents(state.currentEntries);
+        const files = entries.map((entry) => ({
+          name: entryDownloadName(entry),
+          content: entry.content,
+          modifiedAt: entry.created_at
+        }));
+        if (state.currentMetaYaml) {
+          files.unshift({
+            name: metaYamlDownloadName(),
+            content: await fetchMetaYamlContent(),
+            modifiedAt: state.currentMetaYaml.updated_at
+          });
+        }
+        downloadBlob(
+          createZipBlob(files),
+          `${sanitizeFilenamePart(state.currentRoom.slug, "room")}-all-yamls.zip`
+        );
+        showBanner(STATUS_BANNER, "All YAMLs download started.");
+      } catch (error) {
+        showBanner(STATUS_BANNER, error.message || "All YAMLs download failed.", true);
       }
-      downloadBlob(
-        createZipBlob(files),
-        `${sanitizeFilenamePart(state.currentRoom.slug, "room")}-all-yamls.zip`
-      );
-      showBanner(STATUS_BANNER, "All YAMLs download started.");
     });
   }
 
   const downloadBundlesButton = document.querySelector("#download-all-bundles");
   if (downloadBundlesButton) {
-    downloadBundlesButton.addEventListener("click", () => {
-      const bundleFiles = groupEntriesByUploader(state.currentEntries).map((group) => ({
-        name: bundleDownloadName(group),
-        content: combinedYaml(group.entries),
-        modifiedAt: group.entries[0]?.created_at || Date.now()
-      }));
-      if (state.currentMetaYaml) {
-        bundleFiles.unshift({
-          name: metaYamlDownloadName(),
-          content: state.currentMetaYaml.content,
-          modifiedAt: state.currentMetaYaml.updated_at
-        });
+    downloadBundlesButton.addEventListener("click", async () => {
+      try {
+        const entries = await hydrateEntryContents(state.currentEntries);
+        const bundleFiles = groupEntriesByUploader(entries).map((group) => ({
+          name: bundleDownloadName(group),
+          content: combinedYaml(group.entries),
+          modifiedAt: group.entries[0]?.created_at || Date.now()
+        }));
+        if (state.currentMetaYaml) {
+          bundleFiles.unshift({
+            name: metaYamlDownloadName(),
+            content: await fetchMetaYamlContent(),
+            modifiedAt: state.currentMetaYaml.updated_at
+          });
+        }
+        downloadBlob(
+          createZipBlob(bundleFiles),
+          `${sanitizeFilenamePart(state.currentRoom.slug, "room")}-bundled-yamls.zip`
+        );
+        showBanner(STATUS_BANNER, "Bundled YAML download started.");
+      } catch (error) {
+        showBanner(STATUS_BANNER, error.message || "Bundled YAML download failed.", true);
       }
-      downloadBlob(
-        createZipBlob(bundleFiles),
-        `${sanitizeFilenamePart(state.currentRoom.slug, "room")}-bundled-yamls.zip`
-      );
-      showBanner(STATUS_BANNER, "Bundled YAML download started.");
     });
   }
 }
@@ -1182,7 +1259,7 @@ function openDeleteRoomModal() {
   });
 }
 
-function openMetaYamlModal() {
+async function openMetaYamlModal() {
   const metaYaml = state.currentMetaYaml;
   if (!metaYaml) {
     return;
@@ -1192,7 +1269,36 @@ function openMetaYamlModal() {
     "meta.yaml",
     `
       <div class="modal-stack">
-        <pre class="yaml-preview">${escapeHtml(metaYaml.content)}</pre>
+        <p class="content-copy">Loading YAML...</p>
+        <div class="action-row">
+          <button id="modal-close-meta" type="button" class="secondary">Close</button>
+        </div>
+      </div>
+    `,
+    () => {
+      document.querySelector("#modal-close-meta").addEventListener("click", closeModal);
+    }
+  );
+
+  let content;
+  try {
+    content = await fetchMetaYamlContent();
+  } catch (error) {
+    showBanner(STATUS_BANNER, error.message || "Failed to load meta.yaml.", true);
+    if (!MODAL_ROOT.classList.contains("hidden") && MODAL_TITLE.textContent === "meta.yaml") {
+      closeModal();
+    }
+    return;
+  }
+  if (MODAL_ROOT.classList.contains("hidden") || MODAL_TITLE.textContent !== "meta.yaml") {
+    return;
+  }
+
+  showModal(
+    "meta.yaml",
+    `
+      <div class="modal-stack">
+        <pre class="yaml-preview">${escapeHtml(content)}</pre>
         <div class="action-row">
           <button id="modal-download-meta" type="button">Download meta.yaml</button>
           <button id="modal-close-meta" type="button" class="secondary">Close</button>
@@ -1202,8 +1308,65 @@ function openMetaYamlModal() {
     () => {
       document.querySelector("#modal-close-meta").addEventListener("click", closeModal);
       document.querySelector("#modal-download-meta").addEventListener("click", () => {
-        downloadText(metaYaml.content, metaYamlDownloadName());
+        downloadText(content, metaYamlDownloadName());
         showBanner(STATUS_BANNER, "meta.yaml download started.");
+      });
+    }
+  );
+}
+
+async function openEntryYamlModal(entryId) {
+  const entry = state.currentEntries.find((item) => item.id === entryId);
+  if (!entry) {
+    return;
+  }
+
+  const filename = entryDownloadName(entry);
+  showModal(
+    filename,
+    `
+      <div class="modal-stack">
+        <p class="content-copy">Loading YAML...</p>
+        <div class="action-row">
+          <button id="modal-close-entry" type="button" class="secondary">Close</button>
+        </div>
+      </div>
+    `,
+    () => {
+      document.querySelector("#modal-close-entry").addEventListener("click", closeModal);
+    }
+  );
+
+  let content;
+  try {
+    content = await fetchEntryContent(entry.id);
+  } catch (error) {
+    showBanner(STATUS_BANNER, error.message || "Failed to load YAML.", true);
+    if (!MODAL_ROOT.classList.contains("hidden") && MODAL_TITLE.textContent === filename) {
+      closeModal();
+    }
+    return;
+  }
+  if (MODAL_ROOT.classList.contains("hidden") || MODAL_TITLE.textContent !== filename) {
+    return;
+  }
+
+  showModal(
+    filename,
+    `
+      <div class="modal-stack">
+        <pre class="yaml-preview">${escapeHtml(content)}</pre>
+        <div class="action-row">
+          <button id="modal-download-entry" type="button">Download YAML</button>
+          <button id="modal-close-entry" type="button" class="secondary">Close</button>
+        </div>
+      </div>
+    `,
+    () => {
+      document.querySelector("#modal-close-entry").addEventListener("click", closeModal);
+      document.querySelector("#modal-download-entry").addEventListener("click", () => {
+        downloadText(content, filename);
+        showBanner(STATUS_BANNER, "YAML download started.");
       });
     }
   );
@@ -1598,6 +1761,7 @@ function renderRoomPage() {
     ? visibleEntries
         .map((entry) => {
           const actions = [
+            `<button type="button" class="ghost" data-view-entry="${escapeHtml(entry.id)}">View YAML</button>`,
             `<button type="button" class="ghost" data-download-entry="${escapeHtml(entry.id)}">Download</button>`
           ];
           if (canDeleteEntry(entry, room)) {
