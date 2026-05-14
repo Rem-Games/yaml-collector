@@ -28,10 +28,12 @@ Before using this in production, change these Supabase settings:
 - Validates that each YAML has root `name`, root `game`, and a root section whose key matches the `game` value
 - Rejects duplicate player names inside a room unless the root `name` contains `{player}`, `{PLAYER}`, `{number}`, or `{NUMBER}`
 - Lets room creators edit the room name and closing time
+- Lets room creators upload, replace, and remove a room-level `meta.yaml` without normal player YAML validation or upload-limit counting
 - Lets room creators delete any YAML in their room before the room closes and delete the room itself
 - Lets uploaders delete only their own YAMLs, and only before the room closes
 - Sorts the room table by player or game, can filter to only the current browser's YAMLs, and can toggle saved Discord usernames next to player names
-- Downloads one YAML at a time, all YAMLs as a zip, or uploader bundles as a zip of `---`-joined files
+- Downloads one YAML at a time, `meta.yaml`, all YAMLs as a zip, or uploader bundles as a zip of `---`-joined files; zip downloads include `meta.yaml` when present
+- Names uploader bundle files with the uploader's Discord username when one is stored on that uploader's entries
 - Uses this separator when bundling YAMLs:
 
 ```yaml
@@ -52,7 +54,7 @@ This is cookie-based capability control, not account auth.
 - Updating a profile to a non-empty Discord username updates that browser's existing YAML entries in open rooms; clearing the profile or closing a room does not erase usernames already saved on entries
 - Creating a room also creates a room-admin token cookie for that room
 - Only SHA-256 hashes of those tokens are stored in the database
-- Room creation, room updates, uploads, room deletion, and YAML deletion are enforced server-side in Supabase SQL functions
+- Room creation, room updates, uploads, room deletion, YAML deletion, and `meta.yaml` management are enforced server-side in Supabase SQL functions
 
 If a browser's cookies are cleared, that browser loses its delete rights.
 

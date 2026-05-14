@@ -452,6 +452,22 @@ tbody tr:last-child td {
   font-family: "IBM Plex Mono", monospace;
 }
 
+.yaml-preview {
+  max-height: min(60vh, 36rem);
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 1rem;
+  background: rgba(6, 11, 16, 0.94);
+  color: var(--text);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
 .modal-root {
   position: fixed;
   inset: 0;

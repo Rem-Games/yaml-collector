@@ -4,6 +4,7 @@ const STATUS_BANNER = document.querySelector("#status-banner");
 const MAIN_VIEW = document.querySelector("#main-view");
 const NAV_LINKS = Array.from(document.querySelectorAll(".nav-link"));
 const UPLOAD_INPUT = document.querySelector("#upload-input");
+const META_UPLOAD_INPUT = document.querySelector("#meta-upload-input");
 const MODAL_ROOT = document.querySelector("#modal-root");
 const MODAL_BACKDROP = document.querySelector("#modal-backdrop");
 const MODAL_CLOSE = document.querySelector("#modal-close");
@@ -23,6 +24,7 @@ const state = {
   myRooms: [],
   currentRoom: null,
   currentEntries: [],
+  currentMetaYaml: null,
   currentSubmissionCounts: new Map(),
   profile: null,
   profileNeedsDiscord: false,
@@ -33,6 +35,7 @@ const state = {
     showDiscord: false
   },
   pendingUploadRoom: null,
+  pendingMetaUploadRoom: null,
   renderToken: 0
 };
 
@@ -473,6 +476,15 @@ async function fetchRoomEntries(roomSlug) {
     });
 }
 
+async function fetchRoomMetaYaml(roomSlug) {
+  const params = new URLSearchParams({
+    select: "room_slug,content,updated_at",
+    room_slug: `eq.${roomSlug}`
+  });
+  const rows = await apiFetch(`/rest/v1/room_meta_yamls?${params.toString()}`);
+  return rows[0] || null;
+}
+
 function splitYamlDocuments(content) {
   const normalized = content.replace(/\r\n/g, "\n").trim();
   if (!normalized) {
@@ -544,13 +556,18 @@ function groupEntriesByUploader(entries) {
       groups.set(entry.uploader_token_hash, {
         uploaderTokenHash: entry.uploader_token_hash,
         displayName: isMine ? "You" : `Uploader ${uploaderIndex}`,
+        discordUsername: "",
         entries: []
       });
       if (!isMine) {
         uploaderIndex += 1;
       }
     }
-    groups.get(entry.uploader_token_hash).entries.push(entry);
+    const group = groups.get(entry.uploader_token_hash);
+    if (!group.discordUsername && entry.discordUsername) {
+      group.discordUsername = entry.discordUsername;
+    }
+    group.entries.push(entry);
   }
 
   return Array.from(groups.values());
@@ -670,7 +687,8 @@ function entryDownloadName(entry) {
 }
 
 function bundleDownloadName(group) {
-  return `${sanitizeFilenamePart(state.currentRoom.slug, "room")}-${sanitizeFilenamePart(group.displayName, "uploader")}-bundle.yaml`;
+  const uploaderName = group.discordUsername || group.displayName;
+  return `${sanitizeFilenamePart(state.currentRoom.slug, "room")}-${sanitizeFilenamePart(uploaderName, "uploader")}-bundle.yaml`;
 }
 
 function downloadBlob(blob, filename) {
@@ -684,6 +702,10 @@ function downloadBlob(blob, filename) {
 
 function downloadText(text, filename) {
   downloadBlob(new Blob([text], { type: "text/yaml;charset=utf-8" }), filename);
+}
+
+function metaYamlDownloadName() {
+  return "meta.yaml";
 }
 
 function setActiveNav(routeName) {
@@ -955,6 +977,35 @@ function attachRoomPageEvents() {
     deleteRoomButton.addEventListener("click", openDeleteRoomModal);
   }
 
+  const uploadMetaButton = document.querySelector("#upload-meta-yaml");
+  if (uploadMetaButton) {
+    uploadMetaButton.addEventListener("click", () => {
+      state.pendingMetaUploadRoom = state.currentRoom.slug;
+      META_UPLOAD_INPUT.click();
+    });
+  }
+
+  const viewMetaButton = document.querySelector("#view-meta-yaml");
+  if (viewMetaButton) {
+    viewMetaButton.addEventListener("click", openMetaYamlModal);
+  }
+
+  const downloadMetaButton = document.querySelector("#download-meta-yaml");
+  if (downloadMetaButton) {
+    downloadMetaButton.addEventListener("click", () => {
+      if (!state.currentMetaYaml) {
+        return;
+      }
+      downloadText(state.currentMetaYaml.content, metaYamlDownloadName());
+      showBanner(STATUS_BANNER, "meta.yaml download started.");
+    });
+  }
+
+  const deleteMetaButton = document.querySelector("#delete-meta-yaml");
+  if (deleteMetaButton) {
+    deleteMetaButton.addEventListener("click", openDeleteMetaYamlModal);
+  }
+
   const mineToggle = document.querySelector("#only-mine-toggle");
   if (mineToggle) {
     mineToggle.checked = state.roomTable.onlyMine;
@@ -1000,6 +1051,13 @@ function attachRoomPageEvents() {
         content: entry.content,
         modifiedAt: entry.created_at
       }));
+      if (state.currentMetaYaml) {
+        files.unshift({
+          name: metaYamlDownloadName(),
+          content: state.currentMetaYaml.content,
+          modifiedAt: state.currentMetaYaml.updated_at
+        });
+      }
       downloadBlob(
         createZipBlob(files),
         `${sanitizeFilenamePart(state.currentRoom.slug, "room")}-all-yamls.zip`
@@ -1016,6 +1074,13 @@ function attachRoomPageEvents() {
         content: combinedYaml(group.entries),
         modifiedAt: group.entries[0]?.created_at || Date.now()
       }));
+      if (state.currentMetaYaml) {
+        bundleFiles.unshift({
+          name: metaYamlDownloadName(),
+          content: state.currentMetaYaml.content,
+          modifiedAt: state.currentMetaYaml.updated_at
+        });
+      }
       downloadBlob(
         createZipBlob(bundleFiles),
         `${sanitizeFilenamePart(state.currentRoom.slug, "room")}-bundled-yamls.zip`
@@ -1113,6 +1178,59 @@ function openDeleteRoomModal() {
       await refreshMyRooms();
       showBanner(STATUS_BANNER, "Room deleted.");
       navigateTo("rooms");
+    }
+  });
+}
+
+function openMetaYamlModal() {
+  const metaYaml = state.currentMetaYaml;
+  if (!metaYaml) {
+    return;
+  }
+
+  showModal(
+    "meta.yaml",
+    `
+      <div class="modal-stack">
+        <pre class="yaml-preview">${escapeHtml(metaYaml.content)}</pre>
+        <div class="action-row">
+          <button id="modal-download-meta" type="button">Download meta.yaml</button>
+          <button id="modal-close-meta" type="button" class="secondary">Close</button>
+        </div>
+      </div>
+    `,
+    () => {
+      document.querySelector("#modal-close-meta").addEventListener("click", closeModal);
+      document.querySelector("#modal-download-meta").addEventListener("click", () => {
+        downloadText(metaYaml.content, metaYamlDownloadName());
+        showBanner(STATUS_BANNER, "meta.yaml download started.");
+      });
+    }
+  );
+}
+
+function openDeleteMetaYamlModal() {
+  const room = state.currentRoom;
+  if (!room || !state.currentMetaYaml) {
+    return;
+  }
+
+  showConfirmModal({
+    title: "Delete meta.yaml",
+    message: `Remove meta.yaml from ${room.name}?`,
+    confirmLabel: "Delete meta.yaml",
+    onConfirm: async () => {
+      const adminTokenHash = await getRoomAdminTokenHash(room.slug);
+      if (!adminTokenHash) {
+        throw new Error("This browser does not have the room admin cookie.");
+      }
+      await rpc("delete_room_meta_yaml", {
+        p_room_slug: room.slug,
+        p_room_admin_token_hash: adminTokenHash
+      });
+      await loadCurrentRoom(room.slug);
+      showBanner(STATUS_BANNER, "meta.yaml deleted.");
+      renderRoute();
     }
   });
 }
@@ -1223,6 +1341,51 @@ async function handleUploadSelection(files) {
   }
 }
 
+async function handleMetaUploadSelection(files) {
+  if (!state.currentRoom || !state.pendingMetaUploadRoom || state.pendingMetaUploadRoom !== state.currentRoom.slug) {
+    return;
+  }
+
+  clearBanner(STATUS_BANNER);
+
+  try {
+    const room = state.currentRoom;
+    const file = Array.from(files)[0];
+    if (!file) {
+      return;
+    }
+
+    if (file.name.toLowerCase() !== "meta.yaml") {
+      throw new Error('The meta YAML file must be named "meta.yaml".');
+    }
+
+    const adminTokenHash = await getRoomAdminTokenHash(room.slug);
+    if (!adminTokenHash) {
+      throw new Error("This browser does not have the room admin cookie.");
+    }
+
+    const content = await file.text();
+    if (content.length > 1000000) {
+      throw new Error("meta.yaml exceeds the 1 MB limit.");
+    }
+
+    await rpc("upsert_room_meta_yaml", {
+      p_room_slug: room.slug,
+      p_content: content,
+      p_room_admin_token_hash: adminTokenHash
+    });
+
+    await loadCurrentRoom(room.slug);
+    showBanner(STATUS_BANNER, "meta.yaml uploaded.");
+    renderRoute();
+  } catch (error) {
+    showBanner(STATUS_BANNER, error.message || "Meta YAML upload failed.", true);
+  } finally {
+    META_UPLOAD_INPUT.value = "";
+    state.pendingMetaUploadRoom = null;
+  }
+}
+
 async function refreshMyRooms() {
   const [uploadedRoomSlugs] = await Promise.all([fetchMyUploadedRoomSlugs(), ensureUploaderHash()]);
   const createdRoomSlugs = listCreatedRoomSlugs();
@@ -1253,9 +1416,14 @@ async function loadCurrentRoom(roomSlug) {
     };
   }
 
-  const [room, entries] = await Promise.all([fetchRoomInfo(roomSlug), fetchRoomEntries(roomSlug)]);
+  const [room, entries, metaYaml] = await Promise.all([
+    fetchRoomInfo(roomSlug),
+    fetchRoomEntries(roomSlug),
+    fetchRoomMetaYaml(roomSlug)
+  ]);
   state.currentRoom = room;
   state.currentEntries = entries;
+  state.currentMetaYaml = metaYaml;
   state.currentSubmissionCounts = buildSubmissionCounts(entries);
 }
 
@@ -1423,6 +1591,8 @@ function renderRoomPage() {
   const remainingSlots = getRemainingUploadSlots(room, state.currentEntries);
   const visibleEntries = getVisibleRoomEntries();
   const sortMarker = state.roomTable.sortDirection === "asc" ? "↑" : "↓";
+  const metaYaml = state.currentMetaYaml;
+  const hasAnyDownloadableYaml = state.currentEntries.length > 0 || Boolean(metaYaml);
 
   const tableRows = visibleEntries.length
     ? visibleEntries
@@ -1465,6 +1635,21 @@ function renderRoomPage() {
     : remainingSlots === null
       ? "No per-user YAML limit."
       : `${remainingSlots} YAML ${remainingSlots === 1 ? "slot" : "slots"} remaining for this browser.`;
+
+  const metaUpdated = metaYaml
+    ? `<p class="meta-copy">Updated: ${escapeHtml(formatDateTime(metaYaml.updated_at))}</p>`
+    : '<p class="meta-copy">No meta.yaml has been uploaded for this room.</p>';
+  const metaActions = [];
+  if (metaYaml) {
+    metaActions.push('<button id="view-meta-yaml" type="button" class="secondary">View meta.yaml</button>');
+    metaActions.push('<button id="download-meta-yaml" type="button" class="secondary">Download meta.yaml</button>');
+  }
+  if (isCreator) {
+    metaActions.push(`<button id="upload-meta-yaml" type="button">${metaYaml ? "Replace" : "Upload"} meta.yaml</button>`);
+    if (metaYaml) {
+      metaActions.push('<button id="delete-meta-yaml" type="button" class="danger">Delete meta.yaml</button>');
+    }
+  }
 
   MAIN_VIEW.innerHTML = `
     <section class="content-card hero-card">
@@ -1514,6 +1699,16 @@ function renderRoomPage() {
     <section class="content-card">
       <div class="toolbar-row">
         <div class="meta-block">
+          <h3>Meta YAML</h3>
+          ${metaUpdated}
+        </div>
+        <div class="action-row">${metaActions.join("")}</div>
+      </div>
+    </section>
+
+    <section class="content-card">
+      <div class="toolbar-row">
+        <div class="meta-block">
           <h3>Room YAMLs</h3>
           <p class="table-note">Sort by player or game. Filter to only the YAMLs submitted by this browser.</p>
         </div>
@@ -1547,8 +1742,8 @@ function renderRoomPage() {
         </table>
       </div>
       <div class="action-row">
-        <button id="download-all-yamls" type="button" class="secondary" ${state.currentEntries.length ? "" : "disabled"}>Download All YAMLs</button>
-        <button id="download-all-bundles" type="button" class="secondary" ${state.currentEntries.length ? "" : "disabled"}>Download All Bundled YAMLs</button>
+        <button id="download-all-yamls" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download All YAMLs</button>
+        <button id="download-all-bundles" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download All Bundled YAMLs</button>
       </div>
     </section>
   `;
@@ -1648,6 +1843,12 @@ function initUploadEvents() {
   UPLOAD_INPUT.addEventListener("change", () => {
     handleUploadSelection(UPLOAD_INPUT.files || []).catch((error) => {
       showBanner(STATUS_BANNER, error.message || "Upload failed.", true);
+    });
+  });
+
+  META_UPLOAD_INPUT.addEventListener("change", () => {
+    handleMetaUploadSelection(META_UPLOAD_INPUT.files || []).catch((error) => {
+      showBanner(STATUS_BANNER, error.message || "Meta YAML upload failed.", true);
     });
   });
 }

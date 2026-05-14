@@ -24,6 +24,10 @@ begin
   if to_regclass('public.user_profiles') is not null and to_regclass('api.user_profiles') is null then
     alter table public.user_profiles set schema api;
   end if;
+
+  if to_regclass('public.room_meta_yamls') is not null and to_regclass('api.room_meta_yamls') is null then
+    alter table public.room_meta_yamls set schema api;
+  end if;
 end $$;
 
 create table if not exists api.rooms (
@@ -63,6 +67,13 @@ create table if not exists api.user_profiles (
     char_length(discord_username) <= 64
     and discord_username !~ '[[:cntrl:]]'
   ),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+create table if not exists api.room_meta_yamls (
+  room_id uuid primary key references api.rooms(id) on delete cascade,
+  room_slug text not null unique references api.rooms(slug) on delete cascade,
+  content text not null check (char_length(content) <= 1000000),
   updated_at timestamptz not null default timezone('utc', now())
 );
 
@@ -172,6 +183,9 @@ alter table api.yaml_entries
 alter table api.yaml_entries
   add constraint yaml_entries_document_index_check check (document_index >= 1);
 
+alter table api.room_meta_yamls
+  alter column updated_at set default timezone('utc', now());
+
 create index if not exists rooms_closes_at_idx
   on api.rooms (closes_at);
 
@@ -185,6 +199,9 @@ create index if not exists user_profiles_discord_username_idx
   on api.user_profiles (discord_username)
   where discord_username <> '';
 
+create index if not exists room_meta_yamls_room_slug_idx
+  on api.room_meta_yamls (room_slug);
+
 drop index if exists api.yaml_entries_room_player_name_unique_idx;
 
 create unique index if not exists yaml_entries_room_player_name_unique_idx
@@ -195,6 +212,7 @@ create unique index if not exists yaml_entries_room_player_name_unique_idx
 alter table api.rooms enable row level security;
 alter table api.yaml_entries enable row level security;
 alter table api.user_profiles enable row level security;
+alter table api.room_meta_yamls enable row level security;
 
 drop policy if exists "rooms_public_select" on api.rooms;
 create policy "rooms_public_select"
@@ -217,6 +235,13 @@ create policy "user_profiles_public_select"
   to anon, authenticated
   using (true);
 
+drop policy if exists "room_meta_yamls_public_select" on api.room_meta_yamls;
+create policy "room_meta_yamls_public_select"
+  on api.room_meta_yamls
+  for select
+  to anon, authenticated
+  using (true);
+
 drop function if exists public.create_room(text, text, text);
 drop function if exists public.upload_yaml(text, text, text, text, text);
 drop function if exists public.upload_yaml(text, text, text, text, text, uuid, integer);
@@ -228,6 +253,8 @@ drop function if exists api.create_room(text, text, text, timestamptz, integer, 
 drop function if exists api.create_room(text, text, text, timestamptz, integer, boolean, text);
 drop function if exists api.upload_yaml(text, text, text, text, text, uuid, integer);
 drop function if exists api.upload_yaml_batch(text, text, text, jsonb);
+drop function if exists api.upsert_room_meta_yaml(text, text, text);
+drop function if exists api.delete_room_meta_yaml(text, text);
 drop function if exists api.update_room_meta(text, text, timestamptz, text);
 drop function if exists api.update_room_meta(text, text, timestamptz, boolean, text);
 drop function if exists api.delete_room(text, text);
@@ -629,6 +656,78 @@ begin
 end;
 $$;
 
+create or replace function api.upsert_room_meta_yaml(
+  p_room_slug text,
+  p_content text,
+  p_room_admin_token_hash text
+)
+returns setof api.room_meta_yamls
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_room api.rooms%rowtype;
+  v_meta api.room_meta_yamls%rowtype;
+  v_content text := coalesce(p_content, '');
+begin
+  if p_room_admin_token_hash is null or char_length(p_room_admin_token_hash) <> 64 then
+    raise exception 'Invalid room admin token hash.';
+  end if;
+
+  if char_length(v_content) > 1000000 then
+    raise exception 'Meta YAML must be 1 MB or smaller.';
+  end if;
+
+  select *
+  into v_room
+  from api.rooms
+  where slug = lower(trim(p_room_slug))
+    and admin_token_hash = p_room_admin_token_hash;
+
+  if not found then
+    raise exception 'Room not found or not authorized.';
+  end if;
+
+  insert into api.room_meta_yamls (room_id, room_slug, content, updated_at)
+  values (v_room.id, v_room.slug, v_content, timezone('utc', now()))
+  on conflict (room_id)
+  do update
+  set content = excluded.content,
+      updated_at = excluded.updated_at
+  returning * into v_meta;
+
+  return next v_meta;
+end;
+$$;
+
+create or replace function api.delete_room_meta_yaml(
+  p_room_slug text,
+  p_room_admin_token_hash text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_deleted integer := 0;
+begin
+  if p_room_admin_token_hash is null or char_length(p_room_admin_token_hash) <> 64 then
+    raise exception 'Invalid room admin token hash.';
+  end if;
+
+  delete from api.room_meta_yamls as m
+  using api.rooms as r
+  where m.room_id = r.id
+    and r.slug = lower(trim(p_room_slug))
+    and r.admin_token_hash = p_room_admin_token_hash;
+
+  get diagnostics v_deleted = row_count;
+  return v_deleted > 0;
+end;
+$$;
+
 create or replace function api.upsert_user_profile(
   p_uploader_token text,
   p_discord_username text
@@ -681,6 +780,7 @@ revoke all on all functions in schema api from anon, authenticated;
 grant select on api.rooms to anon, authenticated;
 grant select on api.yaml_entries to anon, authenticated;
 grant select on api.user_profiles to anon, authenticated;
+grant select on api.room_meta_yamls to anon, authenticated;
 grant execute on function api.extract_root_scalar(text, text) to anon, authenticated;
 grant execute on function api.has_root_game_section(text, text) to anon, authenticated;
 grant execute on function api.player_name_uses_unique_placeholder(text) to anon, authenticated;
@@ -689,4 +789,6 @@ grant execute on function api.update_room_meta(text, text, timestamptz, boolean,
 grant execute on function api.delete_room(text, text) to anon, authenticated;
 grant execute on function api.upload_yaml_batch(text, text, text, jsonb) to anon, authenticated;
 grant execute on function api.delete_yaml(uuid, text, text) to anon, authenticated;
+grant execute on function api.upsert_room_meta_yaml(text, text, text) to anon, authenticated;
+grant execute on function api.delete_room_meta_yaml(text, text) to anon, authenticated;
 grant execute on function api.upsert_user_profile(text, text) to anon, authenticated;
