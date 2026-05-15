@@ -7,12 +7,14 @@ const UPLOAD_INPUT = document.querySelector("#upload-input");
 const META_UPLOAD_INPUT = document.querySelector("#meta-upload-input");
 const MODAL_ROOT = document.querySelector("#modal-root");
 const MODAL_BACKDROP = document.querySelector("#modal-backdrop");
+const MODAL_PANEL = document.querySelector(".modal-panel");
 const MODAL_CLOSE = document.querySelector("#modal-close");
 const MODAL_TITLE = document.querySelector("#modal-title");
 const MODAL_BODY = document.querySelector("#modal-body");
 
 const ROOM_COOKIE_PREFIX = "yamlcollector_room_admin_";
 const UPLOADER_COOKIE = "yamlcollector_uploader_token";
+const YAML_WORD_WRAP_COOKIE = "yamlcollector_yaml_word_wrap";
 const API_SCHEMA = "api";
 const COMBINED_SEPARATOR = "\n\n---\n\n";
 
@@ -233,6 +235,10 @@ function getAllCookies() {
 function setCookie(name, value, days = 3650) {
   const maxAge = days * 24 * 60 * 60;
   document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; path=/; max-age=${maxAge}; SameSite=Lax`;
+}
+
+function yamlWordWrapEnabled() {
+  return getCookie(YAML_WORD_WRAP_COOKIE) !== "off";
 }
 
 function roomAdminCookieName(roomSlug) {
@@ -761,6 +767,47 @@ function metaYamlDownloadName() {
   return "meta.yaml";
 }
 
+function renderYamlPreview(content) {
+  const wrapClass = yamlWordWrapEnabled() ? "wrap" : "no-wrap";
+  const lines = content.replace(/\r\n?/g, "\n").split("\n");
+  const lineMarkup = lines
+    .map(
+      (line, index) => `
+        <div class="yaml-line">
+          <span class="yaml-line-number">${index + 1}</span>
+          <span class="yaml-line-code">${escapeHtml(line) || "&nbsp;"}</span>
+        </div>
+      `
+    )
+    .join("");
+
+  return `
+    <div class="yaml-viewer">
+      <div class="yaml-toolbar">
+        <label class="checkbox yaml-wrap-toggle">
+          <input id="yaml-word-wrap-toggle" type="checkbox" ${yamlWordWrapEnabled() ? "checked" : ""}>
+          <span>Word wrap</span>
+        </label>
+      </div>
+      <div id="yaml-preview" class="yaml-preview ${wrapClass}">${lineMarkup}</div>
+    </div>
+  `;
+}
+
+function attachYamlPreviewControls() {
+  const toggle = document.querySelector("#yaml-word-wrap-toggle");
+  const preview = document.querySelector("#yaml-preview");
+  if (!toggle || !preview) {
+    return;
+  }
+
+  toggle.addEventListener("change", () => {
+    setCookie(YAML_WORD_WRAP_COOKIE, toggle.checked ? "on" : "off");
+    preview.classList.toggle("wrap", toggle.checked);
+    preview.classList.toggle("no-wrap", !toggle.checked);
+  });
+}
+
 function setActiveNav(routeName) {
   for (const button of NAV_LINKS) {
     button.classList.toggle("active", button.dataset.route === routeName);
@@ -819,9 +866,10 @@ function renderLoading(title) {
   `;
 }
 
-function showModal(title, content, onReady) {
+function showModal(title, content, onReady, options = {}) {
   MODAL_TITLE.textContent = title;
   MODAL_BODY.innerHTML = content;
+  MODAL_PANEL.classList.toggle("modal-panel-wide", Boolean(options.wide));
   MODAL_ROOT.classList.remove("hidden");
   MODAL_ROOT.setAttribute("aria-hidden", "false");
   if (typeof onReady === "function") {
@@ -832,6 +880,7 @@ function showModal(title, content, onReady) {
 function closeModal() {
   MODAL_ROOT.classList.add("hidden");
   MODAL_ROOT.setAttribute("aria-hidden", "true");
+  MODAL_PANEL.classList.remove("modal-panel-wide");
   MODAL_BODY.innerHTML = "";
 }
 
@@ -1277,7 +1326,8 @@ async function openMetaYamlModal() {
     `,
     () => {
       document.querySelector("#modal-close-meta").addEventListener("click", closeModal);
-    }
+    },
+    { wide: true }
   );
 
   let content;
@@ -1298,7 +1348,7 @@ async function openMetaYamlModal() {
     "meta.yaml",
     `
       <div class="modal-stack">
-        <pre class="yaml-preview">${escapeHtml(content)}</pre>
+        ${renderYamlPreview(content)}
         <div class="action-row">
           <button id="modal-download-meta" type="button">Download meta.yaml</button>
           <button id="modal-close-meta" type="button" class="secondary">Close</button>
@@ -1306,12 +1356,14 @@ async function openMetaYamlModal() {
       </div>
     `,
     () => {
+      attachYamlPreviewControls();
       document.querySelector("#modal-close-meta").addEventListener("click", closeModal);
       document.querySelector("#modal-download-meta").addEventListener("click", () => {
         downloadText(content, metaYamlDownloadName());
         showBanner(STATUS_BANNER, "meta.yaml download started.");
       });
-    }
+    },
+    { wide: true }
   );
 }
 
@@ -1334,7 +1386,8 @@ async function openEntryYamlModal(entryId) {
     `,
     () => {
       document.querySelector("#modal-close-entry").addEventListener("click", closeModal);
-    }
+    },
+    { wide: true }
   );
 
   let content;
@@ -1355,7 +1408,7 @@ async function openEntryYamlModal(entryId) {
     filename,
     `
       <div class="modal-stack">
-        <pre class="yaml-preview">${escapeHtml(content)}</pre>
+        ${renderYamlPreview(content)}
         <div class="action-row">
           <button id="modal-download-entry" type="button">Download YAML</button>
           <button id="modal-close-entry" type="button" class="secondary">Close</button>
@@ -1363,12 +1416,14 @@ async function openEntryYamlModal(entryId) {
       </div>
     `,
     () => {
+      attachYamlPreviewControls();
       document.querySelector("#modal-close-entry").addEventListener("click", closeModal);
       document.querySelector("#modal-download-entry").addEventListener("click", () => {
         downloadText(content, filename);
         showBanner(STATUS_BANNER, "YAML download started.");
       });
-    }
+    },
+    { wide: true }
   );
 }
 

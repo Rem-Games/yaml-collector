@@ -452,20 +452,77 @@ tbody tr:last-child td {
   font-family: "IBM Plex Mono", monospace;
 }
 
+.yaml-viewer {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.yaml-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.yaml-wrap-toggle {
+  font-size: 0.9rem;
+}
+
 .yaml-preview {
-  max-height: min(60vh, 36rem);
-  margin: 0;
+  max-height: min(70vh, 48rem);
   overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
   border: 1px solid var(--line);
   border-radius: 18px;
-  padding: 1rem;
   background: rgba(6, 11, 16, 0.94);
   color: var(--text);
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.88rem;
   line-height: 1.5;
+}
+
+.yaml-line {
+  display: grid;
+  grid-template-columns: 3.25rem minmax(0, 1fr);
+  align-items: start;
+}
+
+.yaml-preview.no-wrap .yaml-line {
+  width: max-content;
+  min-width: 100%;
+}
+
+.yaml-line-number {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  padding: 0 0.75rem;
+  color: rgba(147, 167, 185, 0.58);
+  background: rgba(6, 11, 16, 0.98);
+  text-align: right;
+  user-select: none;
+}
+
+.yaml-line:first-child .yaml-line-number,
+.yaml-line:first-child .yaml-line-code {
+  padding-top: 1rem;
+}
+
+.yaml-line:last-child .yaml-line-number,
+.yaml-line:last-child .yaml-line-code {
+  padding-bottom: 1rem;
+}
+
+.yaml-line-code {
+  padding-right: 1rem;
+  color: var(--text);
+}
+
+.yaml-preview.wrap .yaml-line-code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.yaml-preview.no-wrap .yaml-line-code {
+  white-space: pre;
 }
 
 .modal-root {
@@ -493,6 +550,10 @@ tbody tr:last-child td {
   border: 1px solid rgba(255, 255, 255, 0.04);
   box-shadow: var(--shadow);
   padding: 1.25rem;
+}
+
+.modal-panel.modal-panel-wide {
+  width: min(90vw, 1280px);
 }
 
 .modal-head {
