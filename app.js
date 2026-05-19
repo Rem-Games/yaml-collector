@@ -2,6 +2,7 @@
 
 const STATUS_BANNER = document.querySelector("#status-banner");
 const MAIN_VIEW = document.querySelector("#main-view");
+const SIDEBAR_ROOM_CONTEXT = document.querySelector("#sidebar-room-context");
 const NAV_LINKS = Array.from(document.querySelectorAll(".nav-link"));
 const UPLOAD_INPUT = document.querySelector("#upload-input");
 const META_UPLOAD_INPUT = document.querySelector("#meta-upload-input");
@@ -729,7 +730,7 @@ function nextSortDirection(field) {
     state.roomTable.sortField = field;
     state.roomTable.sortDirection = "asc";
   }
-  renderRoute();
+  renderRoomPage();
 }
 
 function combinedYaml(entries) {
@@ -817,6 +818,50 @@ function setActiveNav(routeName) {
         (button.dataset.route === "profile" && state.profileNeedsDiscord)
     );
   }
+}
+
+function renderSidebarRoomContext() {
+  if (!SIDEBAR_ROOM_CONTEXT) {
+    return;
+  }
+
+  const room = state.currentRoom;
+  if (state.route.name !== "room" || !room || room.slug !== state.route.roomSlug) {
+    SIDEBAR_ROOM_CONTEXT.innerHTML = "";
+    SIDEBAR_ROOM_CONTEXT.classList.add("hidden");
+    return;
+  }
+
+  const closed = roomIsClosed(room);
+  const remainingSlots = getRemainingUploadSlots(room, state.currentEntries);
+  const uploadNote = closed
+    ? "This room is closed."
+    : remainingSlots === null
+      ? "No per-user YAML limit."
+      : `${remainingSlots} YAML ${remainingSlots === 1 ? "slot" : "slots"} remaining for this browser.`;
+
+  SIDEBAR_ROOM_CONTEXT.classList.remove("hidden");
+  SIDEBAR_ROOM_CONTEXT.innerHTML = `
+    <div class="sidebar-divider"></div>
+    <p class="sidebar-section-title">Room Uploads</p>
+    <p class="sidebar-room-copy">${escapeHtml(uploadNote)}</p>
+    <div class="sidebar-room-actions">
+      ${
+        canUploadToRoom(room, state.currentEntries)
+          ? `<button id="room-upload-button" type="button" data-room-slug="${escapeHtml(room.slug)}">Upload YAML</button>`
+          : ""
+      }
+      <div class="badge-row">
+        ${
+          Number.isInteger(room.yaml_limit) && room.yaml_limit > 0
+            ? `<span class="badge">Limit: ${room.yaml_limit} per user</span>`
+            : ""
+        }
+        ${room.require_discord_username ? '<span class="badge">Discord Required</span>' : ""}
+        ${closed ? '<span class="badge">Submissions Closed</span>' : ""}
+      </div>
+    </div>
+  `;
 }
 
 function getRouteFromHash() {
@@ -1118,7 +1163,7 @@ function attachRoomPageEvents() {
     mineToggle.checked = state.roomTable.onlyMine;
     mineToggle.addEventListener("change", () => {
       state.roomTable.onlyMine = mineToggle.checked;
-      renderRoute();
+      renderRoomPage();
     });
   }
 
@@ -1127,7 +1172,7 @@ function attachRoomPageEvents() {
     discordToggle.checked = state.roomTable.showDiscord;
     discordToggle.addEventListener("change", () => {
       state.roomTable.showDiscord = discordToggle.checked;
-      renderRoute();
+      renderRoomPage();
     });
   }
 
@@ -1805,11 +1850,10 @@ function renderRoomPage() {
   }
 
   const isCreator = hasRoomAdminToken(room.slug);
-  const closed = roomIsClosed(room);
-  const remainingSlots = getRemainingUploadSlots(room, state.currentEntries);
   const visibleEntries = getVisibleRoomEntries();
   const sortMarker = state.roomTable.sortDirection === "asc" ? "↑" : "↓";
   const metaYaml = state.currentMetaYaml;
+  const roomDescription = String(room.description || "").trim();
   const hasAnyDownloadableYaml = state.currentEntries.length > 0 || Boolean(metaYaml);
 
   const tableRows = visibleEntries.length
@@ -1849,15 +1893,9 @@ function renderRoomPage() {
       </tr>
     `;
 
-  const uploadNote = closed
-    ? "This room is closed."
-    : remainingSlots === null
-      ? "No per-user YAML limit."
-      : `${remainingSlots} YAML ${remainingSlots === 1 ? "slot" : "slots"} remaining for this browser.`;
-
   const metaUpdated = metaYaml
-    ? `<p class="meta-copy">Updated: ${escapeHtml(formatDateTime(metaYaml.updated_at))}</p>`
-    : '<p class="meta-copy">No meta.yaml has been uploaded for this room.</p>';
+    ? `Updated: ${escapeHtml(formatDateTime(metaYaml.updated_at))}`
+    : "No meta.yaml has been uploaded for this room.";
   const metaActions = [];
   if (metaYaml) {
     metaActions.push('<button id="view-meta-yaml" type="button" class="secondary">View meta.yaml</button>');
@@ -1871,74 +1909,64 @@ function renderRoomPage() {
   }
 
   MAIN_VIEW.innerHTML = `
-    <section class="content-card hero-card">
-      <div class="action-row">
-        <div class="meta-block">
-          <p class="eyebrow">Room</p>
-          <h2 class="room-title">${escapeHtml(room.name)}</h2>
-          <p class="meta-copy code-pill">${escapeHtml(room.slug)}</p>
+    <section class="content-card hero-card room-summary-card">
+      <div class="room-overview">
+        <div class="room-heading">
+          <div class="meta-block">
+            <p class="eyebrow">Room</p>
+            <h2 class="room-title">${escapeHtml(room.name)}</h2>
+            <p class="meta-copy code-pill">${escapeHtml(room.slug)}</p>
+          </div>
+          <div class="action-row">
+            ${isCreator ? '<button id="edit-room-button" type="button" class="secondary">Edit Room</button>' : ""}
+            ${isCreator ? '<button id="delete-room-button" type="button" class="danger">Delete Room</button>' : ""}
+          </div>
         </div>
-        <div class="action-row">
-          <button id="copy-room-link" type="button" class="secondary">Copy Room Link</button>
-          ${isCreator ? '<button id="edit-room-button" type="button" class="secondary">Edit Room</button>' : ""}
-          ${isCreator ? '<button id="delete-room-button" type="button" class="danger">Delete Room</button>' : ""}
+        <div class="room-facts">
+          <div class="room-fact-action">
+            <button id="copy-room-link" type="button" class="secondary">Copy Room Link</button>
+          </div>
+          <article class="room-fact">
+            <p class="stat-label">Closing Time</p>
+            <p class="stat-value">${escapeHtml(formatDateTime(room.closes_at))}</p>
+          </article>
+          <article class="room-fact">
+            <p class="stat-label">Players</p>
+            <p class="stat-value">${state.currentEntries.length}</p>
+          </article>
         </div>
       </div>
-      <div class="stat-grid">
-        <article class="stat-card">
-          <p class="stat-label">Closing Time</p>
-          <p class="stat-value">${escapeHtml(formatDateTime(room.closes_at))}</p>
-        </article>
-        <article class="stat-card">
-          <p class="stat-label">Players</p>
-          <p class="stat-value">${state.currentEntries.length}</p>
-        </article>
-        <article class="stat-card">
-          <p class="stat-label">Description</p>
-          <p class="stat-value">${escapeHtml(room.description || "No description")}</p>
-        </article>
-      </div>
-      <p class="room-description">${escapeHtml(uploadNote)}</p>
-      <div class="action-row">
-        ${
-          canUploadToRoom(room, state.currentEntries)
-            ? `<button id="room-upload-button" type="button" data-room-slug="${escapeHtml(room.slug)}">Upload YAML</button>`
-            : ""
-        }
-        ${
-          Number.isInteger(room.yaml_limit) && room.yaml_limit > 0
-            ? `<span class="badge">Limit: ${room.yaml_limit} per user</span>`
-            : ""
-        }
-        ${room.require_discord_username ? '<span class="badge">Discord Required</span>' : ""}
-        ${closed ? '<span class="badge">Submissions Closed</span>' : ""}
-      </div>
+      ${roomDescription ? `<p class="room-description">${escapeHtml(roomDescription)}</p>` : ""}
     </section>
 
     <section class="content-card">
-      <div class="toolbar-row">
-        <div class="meta-block">
+      <div class="toolbar-row meta-yaml-row">
+        <div class="meta-yaml-primary">
           <h3>Meta YAML</h3>
-          ${metaUpdated}
+          <div class="action-row">${metaActions.join("")}</div>
         </div>
-        <div class="action-row">${metaActions.join("")}</div>
+        <p class="meta-copy meta-yaml-updated">${metaUpdated}</p>
       </div>
     </section>
 
     <section class="content-card">
-      <div class="toolbar-row">
+      <div class="toolbar-row room-yamls-row">
         <div class="meta-block">
-          <h3>Room YAMLs</h3>
-          <p class="table-note">Sort by player or game. Filter to only the YAMLs submitted by this browser.</p>
+          <h3
+            class="room-yamls-title"
+            title="Sort by player or game using the table headers. Filter to only the YAMLs submitted by this browser."
+          >Room YAMLs</h3>
         </div>
-        <label class="checkbox">
-          <input id="only-mine-toggle" type="checkbox">
-          <span>Display only my YAMLs</span>
-        </label>
-        <label class="checkbox">
-          <input id="show-discord-toggle" type="checkbox">
-          <span>Show Discord usernames</span>
-        </label>
+        <div class="action-row room-yamls-toggles">
+          <label class="checkbox">
+            <input id="only-mine-toggle" type="checkbox">
+            <span>Display only my YAMLs</span>
+          </label>
+          <label class="checkbox">
+            <input id="show-discord-toggle" type="checkbox">
+            <span>Show Discord usernames</span>
+          </label>
+        </div>
       </div>
       <div class="table-wrap">
         <table>
@@ -1967,12 +1995,14 @@ function renderRoomPage() {
     </section>
   `;
 
+  renderSidebarRoomContext();
   attachRoomPageEvents();
 }
 
 async function renderRoute() {
   const token = ++state.renderToken;
   setActiveNav(state.route.name === "room" ? "rooms" : state.route.name);
+  renderSidebarRoomContext();
 
   if (!state.configReady) {
     if (state.route.name === "about") {
