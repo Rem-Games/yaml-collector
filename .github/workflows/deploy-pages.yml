@@ -51,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp index.html styles.css app.js config.js config.example.js README.md .nojekyll dist/
+          cp index.html styles.css app.js config.js config.example.js README.md .nojekyll favicon.png dist/
           cp -R supabase dist/
 
       - name: Upload Pages artifact
