@@ -1299,6 +1299,18 @@ async function openEditRoomModal() {
           <span>Closing Date</span>
           <input name="room-closing" type="datetime-local" required value="${escapeHtml(isoToLocalInput(room.closes_at))}">
         </label>
+        <label class="field">
+          <span>YAML Limit Per User</span>
+          <input
+            name="yaml-limit"
+            type="number"
+            min="1"
+            step="1"
+            placeholder="Leave empty for no limit"
+            value="${Number.isInteger(room.yaml_limit) && room.yaml_limit > 0 ? escapeHtml(String(room.yaml_limit)) : ""}"
+          >
+          <p class="field-help">Existing uploads are not removed if this limit changes. The limit is checked only when new YAMLs are uploaded.</p>
+        </label>
         <label class="checkbox">
           <input name="require-discord-username" type="checkbox" ${room.require_discord_username ? "checked" : ""}>
           <span>Require Discord username to upload</span>
@@ -1317,9 +1329,16 @@ async function openEditRoomModal() {
         const formData = new FormData(event.currentTarget);
         const roomName = String(formData.get("room-name") || "").trim();
         const closesAt = localInputToIso(String(formData.get("room-closing") || "").trim());
+        const yamlLimitRaw = String(formData.get("yaml-limit") || "").trim();
         const requireDiscordUsername = formData.get("require-discord-username") === "on";
         if (!roomName || !closesAt) {
           showBanner(STATUS_BANNER, "Room name and closing date are required.", true);
+          return;
+        }
+
+        const yamlLimit = yamlLimitRaw ? Number.parseInt(yamlLimitRaw, 10) : null;
+        if (yamlLimitRaw && (!Number.isInteger(yamlLimit) || yamlLimit <= 0)) {
+          showBanner(STATUS_BANNER, "YAML limit must be a positive whole number.", true);
           return;
         }
 
@@ -1333,6 +1352,7 @@ async function openEditRoomModal() {
           p_room_slug: room.slug,
           p_name: roomName,
           p_closes_at: closesAt,
+          p_yaml_limit: yamlLimit,
           p_require_discord_username: requireDiscordUsername,
           p_room_admin_token_hash: adminTokenHash
         });

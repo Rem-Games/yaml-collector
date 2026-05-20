@@ -257,6 +257,7 @@ drop function if exists api.upsert_room_meta_yaml(text, text, text);
 drop function if exists api.delete_room_meta_yaml(text, text);
 drop function if exists api.update_room_meta(text, text, timestamptz, text);
 drop function if exists api.update_room_meta(text, text, timestamptz, boolean, text);
+drop function if exists api.update_room_meta(text, text, timestamptz, integer, boolean, text);
 drop function if exists api.delete_room(text, text);
 drop function if exists api.delete_yaml(uuid, text, text);
 drop function if exists api.upsert_user_profile(text, text);
@@ -390,6 +391,7 @@ create or replace function api.update_room_meta(
   p_room_slug text,
   p_name text,
   p_closes_at timestamptz,
+  p_yaml_limit integer,
   p_require_discord_username boolean,
   p_room_admin_token_hash text
 )
@@ -413,9 +415,14 @@ begin
     raise exception 'Invalid room admin token hash.';
   end if;
 
+  if p_yaml_limit is not null and p_yaml_limit <= 0 then
+    raise exception 'YAML limit must be a positive whole number.';
+  end if;
+
   update api.rooms
   set name = left(trim(p_name), 80),
       closes_at = p_closes_at,
+      yaml_limit = p_yaml_limit,
       require_discord_username = coalesce(p_require_discord_username, false)
   where slug = lower(trim(p_room_slug))
     and admin_token_hash = p_room_admin_token_hash
@@ -785,7 +792,7 @@ grant execute on function api.extract_root_scalar(text, text) to anon, authentic
 grant execute on function api.has_root_game_section(text, text) to anon, authenticated;
 grant execute on function api.player_name_uses_unique_placeholder(text) to anon, authenticated;
 grant execute on function api.create_room(text, text, text, timestamptz, integer, boolean, text) to anon, authenticated;
-grant execute on function api.update_room_meta(text, text, timestamptz, boolean, text) to anon, authenticated;
+grant execute on function api.update_room_meta(text, text, timestamptz, integer, boolean, text) to anon, authenticated;
 grant execute on function api.delete_room(text, text) to anon, authenticated;
 grant execute on function api.upload_yaml_batch(text, text, text, jsonb) to anon, authenticated;
 grant execute on function api.delete_yaml(uuid, text, text) to anon, authenticated;
