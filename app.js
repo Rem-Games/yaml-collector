@@ -1932,7 +1932,6 @@ function renderRoomPage() {
       <div class="room-overview">
         <div class="room-heading">
           <div class="meta-block">
-            <p class="eyebrow">Room</p>
             <h2 class="room-title">${escapeHtml(room.name)}</h2>
             <p class="meta-copy code-pill">${escapeHtml(room.slug)}</p>
           </div>
