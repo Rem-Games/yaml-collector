@@ -16,6 +16,8 @@ const MODAL_BODY = document.querySelector("#modal-body");
 const ROOM_COOKIE_PREFIX = "yamlcollector_room_admin_";
 const UPLOADER_COOKIE = "yamlcollector_uploader_token";
 const YAML_WORD_WRAP_COOKIE = "yamlcollector_yaml_word_wrap";
+const ROOM_SHOW_DISCORD_COOKIE = "yamlcollector_room_show_discord";
+const ROOM_SORT_DISCORD_COOKIE = "yamlcollector_room_sort_discord";
 const API_SCHEMA = "api";
 const COMBINED_SEPARATOR = "\n\n---\n\n";
 
@@ -35,8 +37,8 @@ const state = {
     sortField: "player",
     sortDirection: "asc",
     onlyMine: false,
-    showDiscord: false,
-    sortByDiscordUsername: false
+    showDiscord: roomShowDiscordEnabled(),
+    sortByDiscordUsername: roomSortDiscordEnabled()
   },
   pendingUploadRoom: null,
   pendingMetaUploadRoom: null,
@@ -241,6 +243,24 @@ function setCookie(name, value, days = 3650) {
 
 function yamlWordWrapEnabled() {
   return getCookie(YAML_WORD_WRAP_COOKIE) !== "off";
+}
+
+function roomShowDiscordEnabled() {
+  return getCookie(ROOM_SHOW_DISCORD_COOKIE) === "on";
+}
+
+function roomSortDiscordEnabled() {
+  return roomShowDiscordEnabled() && getCookie(ROOM_SORT_DISCORD_COOKIE) === "on";
+}
+
+function defaultRoomTableState() {
+  return {
+    sortField: "player",
+    sortDirection: "asc",
+    onlyMine: false,
+    showDiscord: roomShowDiscordEnabled(),
+    sortByDiscordUsername: roomSortDiscordEnabled()
+  };
 }
 
 function roomAdminCookieName(roomSlug) {
@@ -1212,8 +1232,10 @@ function attachRoomPageEvents() {
     discordToggle.checked = state.roomTable.showDiscord;
     discordToggle.addEventListener("change", () => {
       state.roomTable.showDiscord = discordToggle.checked;
+      setCookie(ROOM_SHOW_DISCORD_COOKIE, state.roomTable.showDiscord ? "on" : "off");
       if (!state.roomTable.showDiscord) {
         state.roomTable.sortByDiscordUsername = false;
+        setCookie(ROOM_SORT_DISCORD_COOKIE, "off");
       }
       renderRoomPage();
     });
@@ -1224,6 +1246,7 @@ function attachRoomPageEvents() {
     discordSortToggle.checked = state.roomTable.sortByDiscordUsername;
     discordSortToggle.addEventListener("change", () => {
       state.roomTable.sortByDiscordUsername = discordSortToggle.checked;
+      setCookie(ROOM_SORT_DISCORD_COOKIE, state.roomTable.sortByDiscordUsername ? "on" : "off");
       renderRoomPage();
     });
   }
@@ -1743,13 +1766,7 @@ async function refreshMyRooms() {
 
 async function loadCurrentRoom(roomSlug) {
   if (state.currentRoom?.slug !== roomSlug) {
-    state.roomTable = {
-      sortField: "player",
-      sortDirection: "asc",
-      onlyMine: false,
-      showDiscord: false,
-      sortByDiscordUsername: false
-    };
+    state.roomTable = defaultRoomTableState();
   }
 
   const [room, entries, metaYaml] = await Promise.all([
