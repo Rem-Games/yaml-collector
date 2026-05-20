@@ -132,8 +132,10 @@ textarea {
 .sidebar {
   position: sticky;
   top: 0;
-  min-height: 100vh;
+  align-self: start;
+  height: 100vh;
   padding: 0.75rem 0 1rem;
+  overflow-y: auto;
   background: #0d1620;
   color: #dce7f2;
   display: grid;
@@ -699,7 +701,8 @@ tbody tr:last-child td {
 
   .sidebar {
     position: static;
-    min-height: auto;
+    height: auto;
+    overflow-y: visible;
   }
 
   .sidebar-brand {
