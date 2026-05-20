@@ -35,7 +35,8 @@ const state = {
     sortField: "player",
     sortDirection: "asc",
     onlyMine: false,
-    showDiscord: false
+    showDiscord: false,
+    sortByDiscordUsername: false
   },
   pendingUploadRoom: null,
   pendingMetaUploadRoom: null,
@@ -713,7 +714,9 @@ function getVisibleRoomEntries() {
   const field = state.roomTable.sortField;
 
   filtered.sort((left, right) => {
-    const compare = left[field].localeCompare(right[field], undefined, { sensitivity: "base" });
+    const leftValue = roomEntrySortValue(left, field);
+    const rightValue = roomEntrySortValue(right, field);
+    const compare = leftValue.localeCompare(rightValue, undefined, { sensitivity: "base" });
     if (compare !== 0) {
       return compare * direction;
     }
@@ -721,6 +724,13 @@ function getVisibleRoomEntries() {
   });
 
   return filtered;
+}
+
+function roomEntrySortValue(entry, field) {
+  if (field === "player" && state.roomTable.showDiscord && state.roomTable.sortByDiscordUsername) {
+    return uploaderDisplayName(entry);
+  }
+  return String(entry[field] || "");
 }
 
 function uploaderDisplayName(entry) {
@@ -1202,6 +1212,18 @@ function attachRoomPageEvents() {
     discordToggle.checked = state.roomTable.showDiscord;
     discordToggle.addEventListener("change", () => {
       state.roomTable.showDiscord = discordToggle.checked;
+      if (!state.roomTable.showDiscord) {
+        state.roomTable.sortByDiscordUsername = false;
+      }
+      renderRoomPage();
+    });
+  }
+
+  const discordSortToggle = document.querySelector("#sort-discord-toggle");
+  if (discordSortToggle) {
+    discordSortToggle.checked = state.roomTable.sortByDiscordUsername;
+    discordSortToggle.addEventListener("change", () => {
+      state.roomTable.sortByDiscordUsername = discordSortToggle.checked;
       renderRoomPage();
     });
   }
@@ -1725,7 +1747,8 @@ async function loadCurrentRoom(roomSlug) {
       sortField: "player",
       sortDirection: "asc",
       onlyMine: false,
-      showDiscord: false
+      showDiscord: false,
+      sortByDiscordUsername: false
     };
   }
 
@@ -1904,6 +1927,7 @@ function renderRoomPage() {
   const sortMarker = state.roomTable.sortDirection === "asc" ? "↑" : "↓";
   const metaYaml = state.currentMetaYaml;
   const roomDescription = String(room.description || "").trim();
+  const playerColumnLabel = state.roomTable.showDiscord && state.roomTable.sortByDiscordUsername ? "Username" : "Player";
 
   const tableRows = visibleEntries.length
     ? visibleEntries
@@ -2007,6 +2031,16 @@ function renderRoomPage() {
             <input id="show-discord-toggle" type="checkbox">
             <span>Show Discord usernames</span>
           </label>
+          ${
+            state.roomTable.showDiscord
+              ? `
+                <label class="checkbox">
+                  <input id="sort-discord-toggle" type="checkbox">
+                  <span>Sort by Discord username</span>
+                </label>
+              `
+              : ""
+          }
         </div>
       </div>
       <div class="table-wrap">
@@ -2015,7 +2049,7 @@ function renderRoomPage() {
             <tr>
               <th>
                 <button type="button" class="sort-button" data-sort-field="player">
-                  Player ${state.roomTable.sortField === "player" ? sortMarker : ""}
+                  ${playerColumnLabel} ${state.roomTable.sortField === "player" ? sortMarker : ""}
                 </button>
               </th>
               <th>
