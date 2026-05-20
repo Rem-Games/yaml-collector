@@ -834,6 +834,7 @@ function renderSidebarRoomContext() {
 
   const closed = roomIsClosed(room);
   const remainingSlots = getRemainingUploadSlots(room, state.currentEntries);
+  const hasAnyDownloadableYaml = state.currentEntries.length > 0 || Boolean(state.currentMetaYaml);
   const uploadNote = closed
     ? "This room is closed."
     : remainingSlots === null
@@ -860,6 +861,12 @@ function renderSidebarRoomContext() {
         ${room.require_discord_username ? '<span class="badge">Discord Required</span>' : ""}
         ${closed ? '<span class="badge">Submissions Closed</span>' : ""}
       </div>
+    </div>
+    <div class="sidebar-divider"></div>
+    <p class="sidebar-section-title">YAML Download</p>
+    <div class="sidebar-room-actions">
+      <button id="download-all-yamls" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download YAMLs</button>
+      <button id="download-all-bundles" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download Bundles</button>
     </div>
   `;
 }
@@ -1854,7 +1861,6 @@ function renderRoomPage() {
   const sortMarker = state.roomTable.sortDirection === "asc" ? "↑" : "↓";
   const metaYaml = state.currentMetaYaml;
   const roomDescription = String(room.description || "").trim();
-  const hasAnyDownloadableYaml = state.currentEntries.length > 0 || Boolean(metaYaml);
 
   const tableRows = visibleEntries.length
     ? visibleEntries
@@ -1987,10 +1993,6 @@ function renderRoomPage() {
           </thead>
           <tbody>${tableRows}</tbody>
         </table>
-      </div>
-      <div class="action-row">
-        <button id="download-all-yamls" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download All YAMLs</button>
-        <button id="download-all-bundles" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download All Bundled YAMLs</button>
       </div>
     </section>
   `;

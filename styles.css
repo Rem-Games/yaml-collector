@@ -187,8 +187,10 @@ textarea {
   align-items: start;
 }
 
-.sidebar-room-actions button {
+.sidebar-room-actions button,
+.sidebar-room-actions .badge {
   justify-self: start;
+  max-width: 100%;
 }
 
 .nav-link {
