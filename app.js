@@ -723,6 +723,16 @@ function getVisibleRoomEntries() {
   return filtered;
 }
 
+function uploaderDisplayName(entry) {
+  const discordUsername = String(entry.discordUsername || "").trim();
+  if (discordUsername) {
+    return discordUsername;
+  }
+
+  const uploaderHash = String(entry.uploader_token_hash || "").trim();
+  return uploaderHash ? `Uploader ${uploaderHash.slice(0, 8)}` : "Uploader unknown";
+}
+
 function nextSortDirection(field) {
   if (state.roomTable.sortField === field) {
     state.roomTable.sortDirection = state.roomTable.sortDirection === "asc" ? "desc" : "asc";
@@ -1898,6 +1908,7 @@ function renderRoomPage() {
   const tableRows = visibleEntries.length
     ? visibleEntries
         .map((entry) => {
+          const uploaderName = state.roomTable.showDiscord ? uploaderDisplayName(entry) : "";
           const actions = [
             `<button type="button" class="ghost" data-view-entry="${escapeHtml(entry.id)}">View YAML</button>`,
             `<button type="button" class="ghost" data-download-entry="${escapeHtml(entry.id)}">Download</button>`
@@ -1910,12 +1921,8 @@ function renderRoomPage() {
             <tr>
               <td>
                 <div class="player-cell">
-                  <span>${escapeHtml(entry.player)}</span>
-                  ${
-                    state.roomTable.showDiscord && entry.discordUsername
-                      ? `<span class="discord-name">${escapeHtml(entry.discordUsername)}</span>`
-                      : ""
-                  }
+                  <span class="player-name">${escapeHtml(entry.player)}</span>
+                  ${uploaderName ? `<span class="uploader-name">${escapeHtml(uploaderName)}</span>` : ""}
                 </div>
               </td>
               <td>${escapeHtml(entry.game)}</td>

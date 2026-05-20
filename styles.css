@@ -369,6 +369,10 @@ textarea {
   align-items: center;
 }
 
+.inline-row {
+  gap: 0.55rem;
+}
+
 .meta-yaml-row {
   justify-content: space-between;
 }
@@ -416,13 +420,23 @@ textarea {
 
 .player-cell {
   display: grid;
-  gap: 0.18rem;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 1rem;
+  align-items: baseline;
+  padding-right: 0.6rem;
 }
 
-.discord-name {
+.player-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.uploader-name {
+  justify-self: end;
   color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.2;
+  white-space: nowrap;
 }
 
 .stat-grid {
@@ -461,9 +475,18 @@ table {
 
 th,
 td {
-  padding: 0.95rem 1rem;
+  padding: 0.62rem 0.8rem;
   text-align: left;
   border-bottom: 1px solid var(--line);
+}
+
+.table-wrap .inline-row {
+  gap: 0.42rem;
+}
+
+.table-wrap button.ghost,
+.table-wrap button.danger {
+  padding: 0.45rem 0.72rem;
 }
 
 thead th {
@@ -766,7 +789,17 @@ tbody tr:last-child td {
 
   th,
   td {
-    padding: 0.78rem 0.7rem;
+    padding: 0.58rem 0.62rem;
     font-size: 0.93rem;
+  }
+
+  .player-cell {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+    padding-right: 0;
+  }
+
+  .uploader-name {
+    justify-self: start;
   }
 }
