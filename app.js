@@ -833,6 +833,7 @@ function renderSidebarRoomContext() {
   }
 
   const closed = roomIsClosed(room);
+  const isCreator = hasRoomAdminToken(room.slug);
   const remainingSlots = getRemainingUploadSlots(room, state.currentEntries);
   const hasAnyDownloadableYaml = state.currentEntries.length > 0 || Boolean(state.currentMetaYaml);
   const uploadNote = closed
@@ -868,6 +869,18 @@ function renderSidebarRoomContext() {
       <button id="download-all-yamls" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download YAMLs</button>
       <button id="download-all-bundles" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download Bundles</button>
     </div>
+    ${
+      isCreator
+        ? `
+          <div class="sidebar-divider"></div>
+          <p class="sidebar-section-title">Manage Room</p>
+          <div class="sidebar-room-actions">
+            <button id="edit-room-button" type="button" class="secondary">Edit Room</button>
+            <button id="delete-room-button" type="button" class="danger">Delete Room</button>
+          </div>
+        `
+        : ""
+    }
   `;
 }
 
@@ -1922,10 +1935,6 @@ function renderRoomPage() {
             <p class="eyebrow">Room</p>
             <h2 class="room-title">${escapeHtml(room.name)}</h2>
             <p class="meta-copy code-pill">${escapeHtml(room.slug)}</p>
-          </div>
-          <div class="action-row">
-            ${isCreator ? '<button id="edit-room-button" type="button" class="secondary">Edit Room</button>' : ""}
-            ${isCreator ? '<button id="delete-room-button" type="button" class="danger">Delete Room</button>' : ""}
           </div>
         </div>
         <div class="room-facts">
