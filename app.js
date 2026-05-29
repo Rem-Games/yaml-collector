@@ -589,7 +589,7 @@ function hasRootGameSection(content, gameValue) {
   return pattern.test(normalized);
 }
 
-function validateYamlDocumentContent(content, existingNamesLower) {
+function validateYamlDocumentContent(content, existingSlotOwners, batchNamesLower) {
   const playerName = extractRootScalar(content, "name");
   if (!playerName) {
     throw new Error('YAML must include a root "name" field.');
@@ -605,17 +605,23 @@ function validateYamlDocumentContent(content, existingNamesLower) {
   }
 
   const playerKey = playerName.toLowerCase();
-  if (!playerNameUsesUniquePlaceholder(playerName) && existingNamesLower.has(playerKey)) {
-    throw new Error(`${playerName} is already present in this room.`);
-  }
-
+  let replacesExisting = false;
   if (!playerNameUsesUniquePlaceholder(playerName)) {
-    existingNamesLower.add(playerKey);
+    const existingEntry = existingSlotOwners.get(playerKey);
+    if (existingEntry && !existingEntry.isMine) {
+      throw new Error(`${playerName} is already present in this room.`);
+    }
+    if (batchNamesLower.has(playerKey)) {
+      throw new Error(`${playerName} appears more than once in this upload.`);
+    }
+    replacesExisting = Boolean(existingEntry?.isMine);
+    batchNamesLower.add(playerKey);
   }
 
   return {
     playerName,
-    gameName
+    gameName,
+    replacesExisting
   };
 }
 
@@ -711,8 +717,7 @@ function canUploadToRoom(room, roomEntries) {
   if (roomIsClosed(room)) {
     return false;
   }
-  const remaining = getRemainingUploadSlots(room, roomEntries);
-  return remaining === null || remaining > 0;
+  return true;
 }
 
 function canDeleteEntry(entry, room) {
@@ -1634,7 +1639,7 @@ async function handleUploadSelection(files) {
       return;
     }
 
-    if (!canUploadToRoom(room, state.currentEntries)) {
+    if (roomIsClosed(room)) {
       throw new Error("This room is closed or you have reached the YAML limit.");
     }
 
@@ -1643,12 +1648,18 @@ async function handleUploadSelection(files) {
       return;
     }
 
+    const uploaderHash = await ensureUploaderHash();
     const preparedUploads = [];
-    const reservedNames = new Set(
+    const existingSlotOwners = new Map(
       state.currentEntries
         .filter((entry) => !playerNameUsesUniquePlaceholder(entry.player))
-        .map((entry) => entry.player.toLowerCase())
+        .map((entry) => [entry.player.toLowerCase(), {
+          ...entry,
+          isMine: entry.uploader_token_hash === uploaderHash
+        }])
     );
+    const batchNamesLower = new Set();
+    const replacedSlots = [];
     for (const file of fileList) {
       const content = await file.text();
       const documents = splitYamlDocuments(content);
@@ -1659,7 +1670,10 @@ async function handleUploadSelection(files) {
       preparedUploads.push({
         originalFilename: file.name,
         documents: documents.map((documentContent, index) => {
-          const validation = validateYamlDocumentContent(documentContent, reservedNames);
+          const validation = validateYamlDocumentContent(documentContent, existingSlotOwners, batchNamesLower);
+          if (validation.replacesExisting) {
+            replacedSlots.push(validation.playerName);
+          }
           return {
             label: documents.length > 1 ? `${baseLabel} · Doc ${index + 1}` : baseLabel,
             content: documentContent,
@@ -1673,11 +1687,11 @@ async function handleUploadSelection(files) {
 
     const remainingSlots = getRemainingUploadSlots(room, state.currentEntries);
     const totalDocuments = preparedUploads.reduce((sum, item) => sum + item.documents.length, 0);
-    if (remainingSlots !== null && totalDocuments > remainingSlots) {
+    const newDocumentCount = totalDocuments - replacedSlots.length;
+    if (remainingSlots !== null && newDocumentCount > remainingSlots) {
       throw new Error(`This room allows ${remainingSlots} more YAML ${remainingSlots === 1 ? "entry" : "entries"} from this browser.`);
     }
 
-    const uploaderHash = await ensureUploaderHash();
     for (const upload of preparedUploads) {
       await rpc("upload_yaml_batch", {
         p_room_slug: room.slug,
@@ -1689,7 +1703,11 @@ async function handleUploadSelection(files) {
 
     await loadCurrentRoom(room.slug);
     await refreshMyRooms();
-    showBanner(STATUS_BANNER, `Uploaded ${totalDocuments} YAML ${totalDocuments === 1 ? "document" : "documents"}.`);
+    const uploadMessage = [`Uploaded ${totalDocuments} YAML ${totalDocuments === 1 ? "document" : "documents"}.`];
+    if (replacedSlots.length > 0) {
+      uploadMessage.push(`Replaced: ${replacedSlots.join(", ")}.`);
+    }
+    showBanner(STATUS_BANNER, uploadMessage.join("\n"));
     renderRoute();
   } catch (error) {
     showBanner(STATUS_BANNER, error.message || "Upload failed.", true);

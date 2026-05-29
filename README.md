@@ -30,7 +30,7 @@ Before using this in production, change these Supabase settings:
 - Lets room creators edit the room name, closing time, per-user YAML limit, and Discord username requirement
 - Lets room creators upload, replace, and remove a room-level `meta.yaml` without normal player YAML validation or upload-limit counting
 - Lets room creators delete any YAML in their room before the room closes and delete the room itself
-- Lets uploaders delete only their own YAMLs, and only before the room closes
+- Lets uploaders replace or delete only their own YAMLs, and only before the room closes
 - Sorts the room table by player or game, can filter to only the current browser's YAMLs, and can toggle saved Discord usernames next to player names
 - Downloads one YAML at a time, `meta.yaml`, all YAMLs as a zip, or uploader bundles as a zip of `---`-joined files; zip downloads include `meta.yaml` when present
 - Names uploader bundle files with the uploader's Discord username when one is stored on that uploader's entries

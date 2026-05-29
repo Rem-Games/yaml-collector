@@ -471,6 +471,7 @@ as $$
 declare
   v_room api.rooms%rowtype;
   v_entry api.yaml_entries%rowtype;
+  v_existing_entry api.yaml_entries%rowtype;
   v_filename text := nullif(left(coalesce(trim(p_original_filename), ''), 240), '');
   v_existing_count integer := 0;
   v_new_count integer := 0;
@@ -504,15 +505,29 @@ begin
     raise exception 'This room is closed.';
   end if;
 
-  select count(*)
-  into v_new_count
-  from jsonb_array_elements(p_documents);
-
-  if v_new_count = 0 then
+  if jsonb_array_length(p_documents) = 0 then
     raise exception 'At least one YAML document is required.';
   end if;
 
   if v_room.yaml_limit is not null then
+    select count(*)
+    into v_new_count
+    from jsonb_array_elements(p_documents) as docs(doc)
+    where api.extract_root_scalar(coalesce(docs.doc ->> 'content', ''), 'name') is null
+      or api.player_name_uses_unique_placeholder(api.extract_root_scalar(coalesce(docs.doc ->> 'content', ''), 'name'))
+      or not exists (
+        select 1
+        from api.yaml_entries as existing
+        where existing.room_id = v_room.id
+          and existing.uploader_token_hash = p_uploader_token_hash
+          and lower(
+            coalesce(
+              existing.player_name,
+              api.extract_root_scalar(existing.content, 'name')
+            )
+          ) = lower(api.extract_root_scalar(coalesce(docs.doc ->> 'content', ''), 'name'))
+      );
+
     select count(*)
     into v_existing_count
     from api.yaml_entries
@@ -573,8 +588,10 @@ begin
       raise exception 'YAML for % must include a root "%" section.', v_player_name, v_game_name;
     end if;
 
-    if not api.player_name_uses_unique_placeholder(v_player_name) and exists (
-      select 1
+    v_existing_entry := null;
+    if not api.player_name_uses_unique_placeholder(v_player_name) then
+      select *
+      into v_existing_entry
       from api.yaml_entries
       where room_id = v_room.id
         and not api.player_name_uses_unique_placeholder(
@@ -589,42 +606,59 @@ begin
             api.extract_root_scalar(content, 'name')
           )
         ) = lower(v_player_name)
-    ) then
-      raise exception '% is already present in this room.', v_player_name;
+      limit 1;
+
+      if v_existing_entry.id is not null and v_existing_entry.uploader_token_hash <> p_uploader_token_hash then
+        raise exception '% is already present in this room.', v_player_name;
+      end if;
     end if;
 
-    begin
-      insert into api.yaml_entries (
-        room_id,
-        room_slug,
-        submission_id,
-        document_index,
-        player_name,
-        game_name,
-        discord_username,
-        label,
-        original_filename,
-        content,
-        uploader_token_hash
-      )
-      values (
-        v_room.id,
-        v_room.slug,
-        v_submission_id,
-        v_document_index,
-        v_player_name,
-        v_game_name,
-        v_discord_username,
-        v_label,
-        v_filename,
-        v_content,
-        p_uploader_token_hash
-      )
+    if v_existing_entry.id is not null then
+      update api.yaml_entries
+      set submission_id = v_submission_id,
+        document_index = v_document_index,
+        player_name = v_player_name,
+        game_name = v_game_name,
+        discord_username = v_discord_username,
+        label = v_label,
+        original_filename = v_filename,
+        content = v_content
+      where id = v_existing_entry.id
       returning * into v_entry;
-    exception
-      when unique_violation then
-        raise exception '% is already present in this room.', v_player_name;
-    end;
+    else
+      begin
+        insert into api.yaml_entries (
+          room_id,
+          room_slug,
+          submission_id,
+          document_index,
+          player_name,
+          game_name,
+          discord_username,
+          label,
+          original_filename,
+          content,
+          uploader_token_hash
+        )
+        values (
+          v_room.id,
+          v_room.slug,
+          v_submission_id,
+          v_document_index,
+          v_player_name,
+          v_game_name,
+          v_discord_username,
+          v_label,
+          v_filename,
+          v_content,
+          p_uploader_token_hash
+        )
+        returning * into v_entry;
+      exception
+        when unique_violation then
+          raise exception '% is already present in this room.', v_player_name;
+      end;
+    end if;
 
     return next v_entry;
   end loop;

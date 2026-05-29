@@ -554,6 +554,7 @@ tbody tr:last-child td {
   border-radius: 18px;
   background: rgba(37, 117, 91, 0.1);
   border: 1px solid rgba(37, 117, 91, 0.18);
+  white-space: pre-line;
 }
 
 .banner.error {
