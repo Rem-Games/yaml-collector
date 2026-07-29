@@ -38,6 +38,7 @@ create table if not exists api.rooms (
   closes_at timestamptz not null default timezone('utc', now()) + interval '30 days',
   yaml_limit integer,
   require_discord_username boolean not null default false,
+  secret_mode boolean not null default false,
   admin_token_hash text not null check (char_length(admin_token_hash) = 64),
   created_at timestamptz not null default timezone('utc', now())
 );
@@ -89,15 +90,28 @@ alter table api.rooms
 alter table api.rooms
   add column if not exists require_discord_username boolean;
 
+alter table api.rooms
+  add column if not exists secret_mode boolean;
+
 update api.rooms
 set require_discord_username = false
 where require_discord_username is null;
+
+update api.rooms
+set secret_mode = false
+where secret_mode is null;
 
 alter table api.rooms
   alter column require_discord_username set default false;
 
 alter table api.rooms
   alter column require_discord_username set not null;
+
+alter table api.rooms
+  alter column secret_mode set default false;
+
+alter table api.rooms
+  alter column secret_mode set not null;
 
 update api.rooms
 set description = coalesce(description, '')
@@ -251,8 +265,14 @@ drop function if exists public.upsert_user_profile(text, text);
 drop function if exists api.create_room(text, text, text);
 drop function if exists api.create_room(text, text, text, timestamptz, integer, text);
 drop function if exists api.create_room(text, text, text, timestamptz, integer, boolean, text);
+drop function if exists api.create_room(text, text, text, timestamptz, integer, boolean, boolean, text);
 drop function if exists api.upload_yaml(text, text, text, text, text, uuid, integer);
 drop function if exists api.upload_yaml_batch(text, text, text, jsonb);
+drop function if exists api.get_uploaded_room_slugs(text);
+drop function if exists api.get_room_entries(text, text);
+drop function if exists api.get_yaml_entry_content(uuid, text);
+drop function if exists api.get_room_yaml_contents(text, text, text);
+drop function if exists api.get_room_meta_yaml_content(text, text);
 drop function if exists api.upsert_room_meta_yaml(text, text, text);
 drop function if exists api.delete_room_meta_yaml(text, text);
 drop function if exists api.update_room_meta(text, text, timestamptz, text);
@@ -260,6 +280,7 @@ drop function if exists api.update_room_meta(text, text, timestamptz, boolean, t
 drop function if exists api.update_room_meta(text, text, timestamptz, integer, boolean, text);
 drop function if exists api.delete_room(text, text);
 drop function if exists api.delete_yaml(uuid, text, text);
+drop function if exists api.get_user_profile(text);
 drop function if exists api.upsert_user_profile(text, text);
 
 create or replace function api.extract_root_scalar(
@@ -330,6 +351,7 @@ create or replace function api.create_room(
   p_closes_at timestamptz,
   p_yaml_limit integer,
   p_require_discord_username boolean,
+  p_secret_mode boolean,
   p_admin_token_hash text
 )
 returns setof api.rooms
@@ -370,6 +392,7 @@ begin
     closes_at,
     yaml_limit,
     require_discord_username,
+    secret_mode,
     admin_token_hash
   )
   values (
@@ -379,11 +402,57 @@ begin
     p_closes_at,
     p_yaml_limit,
     coalesce(p_require_discord_username, false),
+    coalesce(p_secret_mode, false),
     p_admin_token_hash
   )
   returning * into v_room;
 
   return next v_room;
+end;
+$$;
+
+create or replace function api.get_uploaded_room_slugs(
+  p_uploader_token_hash text
+)
+returns table (
+  room_slug text
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if p_uploader_token_hash is null or char_length(p_uploader_token_hash) <> 64 then
+    raise exception 'Invalid uploader token hash.';
+  end if;
+
+  return query
+  select distinct e.room_slug
+  from api.yaml_entries as e
+  where e.uploader_token_hash = p_uploader_token_hash
+  order by e.room_slug;
+end;
+$$;
+
+create or replace function api.get_user_profile(
+  p_uploader_token_hash text
+)
+returns table (
+  discord_username text
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if p_uploader_token_hash is null or char_length(p_uploader_token_hash) <> 64 then
+    raise exception 'Invalid uploader token hash.';
+  end if;
+
+  return query
+  select coalesce(p.discord_username, '')
+  from api.user_profiles as p
+  where p.uploader_token_hash = p_uploader_token_hash;
 end;
 $$;
 
@@ -665,6 +734,234 @@ begin
 end;
 $$;
 
+create or replace function api.get_room_entries(
+  p_room_slug text,
+  p_requester_token_hash text default null
+)
+returns table (
+  id uuid,
+  label text,
+  original_filename text,
+  created_at timestamptz,
+  uploader_token_hash text,
+  submission_id uuid,
+  document_index integer,
+  player_name text,
+  game_name text,
+  discord_username text
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if p_requester_token_hash is not null and char_length(p_requester_token_hash) <> 64 then
+    raise exception 'Invalid requester token hash.';
+  end if;
+
+  return query
+  with uploader_order as (
+    select
+      e.uploader_token_hash,
+      min(e.created_at) as first_upload_at
+    from api.yaml_entries as e
+    join api.rooms as r on r.id = e.room_id
+    where r.slug = lower(trim(p_room_slug))
+    group by e.uploader_token_hash
+  ),
+  numbered_entries as (
+    select
+      e.*,
+      r.secret_mode,
+      row_number() over (order by e.created_at, e.document_index, e.id) as slot_number,
+      dense_rank() over (order by u.first_upload_at, u.uploader_token_hash) as uploader_number
+    from api.yaml_entries as e
+    join api.rooms as r on r.id = e.room_id
+    join uploader_order as u on u.uploader_token_hash = e.uploader_token_hash
+    where r.slug = lower(trim(p_room_slug))
+  )
+  select
+    n.id,
+    case
+      when n.secret_mode and n.uploader_token_hash <> coalesce(p_requester_token_hash, '') then 'slot' || n.slot_number::text
+      else n.label
+    end as label,
+    case
+      when n.secret_mode then null
+      else n.original_filename
+    end as original_filename,
+    n.created_at,
+    case
+      when n.uploader_token_hash = coalesce(p_requester_token_hash, '') then n.uploader_token_hash
+      else 'uploader' || n.uploader_number::text
+    end as uploader_token_hash,
+    n.submission_id,
+    n.document_index,
+    case
+      when n.secret_mode and n.uploader_token_hash <> coalesce(p_requester_token_hash, '') then 'slot' || n.slot_number::text
+      else n.player_name
+    end as player_name,
+    case
+      when n.secret_mode and n.uploader_token_hash <> coalesce(p_requester_token_hash, '') then 'game' || n.slot_number::text
+      else n.game_name
+    end as game_name,
+    n.discord_username
+  from numbered_entries as n
+  order by n.created_at, n.document_index, n.id;
+end;
+$$;
+
+create or replace function api.get_yaml_entry_content(
+  p_entry_id uuid,
+  p_requester_token_hash text default null
+)
+returns table (
+  id uuid,
+  content text
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if p_requester_token_hash is not null and char_length(p_requester_token_hash) <> 64 then
+    raise exception 'Invalid requester token hash.';
+  end if;
+
+  return query
+  select e.id, e.content
+  from api.yaml_entries as e
+  join api.rooms as r on r.id = e.room_id
+  where e.id = p_entry_id
+    and (
+      not r.secret_mode
+      or (
+        p_requester_token_hash is not null
+        and e.uploader_token_hash = p_requester_token_hash
+      )
+    );
+end;
+$$;
+
+create or replace function api.get_room_yaml_contents(
+  p_room_slug text,
+  p_requester_token_hash text default null,
+  p_room_admin_token_hash text default null
+)
+returns table (
+  id uuid,
+  submission_id uuid,
+  document_index integer,
+  original_filename text,
+  player_name text,
+  game_name text,
+  discord_username text,
+  uploader_token_hash text,
+  created_at timestamptz,
+  content text
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_room api.rooms%rowtype;
+begin
+  if p_requester_token_hash is not null and char_length(p_requester_token_hash) <> 64 then
+    raise exception 'Invalid requester token hash.';
+  end if;
+
+  if p_room_admin_token_hash is not null and char_length(p_room_admin_token_hash) <> 64 then
+    raise exception 'Invalid room admin token hash.';
+  end if;
+
+  select *
+  into v_room
+  from api.rooms
+  where slug = lower(trim(p_room_slug));
+
+  if not found then
+    raise exception 'Room not found.';
+  end if;
+
+  if v_room.secret_mode
+    and not (
+      timezone('utc', now()) >= v_room.closes_at
+      and p_room_admin_token_hash is not null
+      and v_room.admin_token_hash = p_room_admin_token_hash
+    )
+  then
+    raise exception 'Secret room YAML downloads are only available to the host after closing.';
+  end if;
+
+  return query
+  with uploader_order as (
+    select
+      e.uploader_token_hash,
+      min(e.created_at) as first_upload_at
+    from api.yaml_entries as e
+    where e.room_id = v_room.id
+    group by e.uploader_token_hash
+  ),
+  numbered_entries as (
+    select
+      e.*,
+      dense_rank() over (order by u.first_upload_at, u.uploader_token_hash) as uploader_number
+    from api.yaml_entries as e
+    join uploader_order as u on u.uploader_token_hash = e.uploader_token_hash
+    where e.room_id = v_room.id
+  )
+  select
+    n.id,
+    n.submission_id,
+    n.document_index,
+    n.original_filename,
+    n.player_name,
+    n.game_name,
+    n.discord_username,
+    case
+      when n.uploader_token_hash = coalesce(p_requester_token_hash, '') then n.uploader_token_hash
+      else 'uploader' || n.uploader_number::text
+    end as uploader_token_hash,
+    n.created_at,
+    n.content
+  from numbered_entries as n
+  order by n.created_at, n.document_index, n.id;
+end;
+$$;
+
+create or replace function api.get_room_meta_yaml_content(
+  p_room_slug text,
+  p_room_admin_token_hash text default null
+)
+returns table (
+  room_slug text,
+  content text
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if p_room_admin_token_hash is not null and char_length(p_room_admin_token_hash) <> 64 then
+    raise exception 'Invalid room admin token hash.';
+  end if;
+
+  return query
+  select m.room_slug, m.content
+  from api.room_meta_yamls as m
+  join api.rooms as r on r.id = m.room_id
+  where r.slug = lower(trim(p_room_slug))
+    and (
+      not r.secret_mode
+      or (
+        p_room_admin_token_hash is not null
+        and r.admin_token_hash = p_room_admin_token_hash
+      )
+    );
+end;
+$$;
+
 create or replace function api.delete_yaml(
   p_entry_id uuid,
   p_requester_token_hash text default null,
@@ -684,7 +981,11 @@ begin
     and r.id = e.room_id
     and timezone('utc', now()) < r.closes_at
     and (
-      (p_room_admin_token_hash is not null and r.admin_token_hash = p_room_admin_token_hash)
+      (
+        p_room_admin_token_hash is not null
+        and r.admin_token_hash = p_room_admin_token_hash
+        and not r.secret_mode
+      )
       or
       (
         p_requester_token_hash is not null
@@ -818,18 +1119,39 @@ $$;
 revoke all on all functions in schema api from public;
 revoke all on all functions in schema api from anon, authenticated;
 
-grant select on api.rooms to anon, authenticated;
-grant select on api.yaml_entries to anon, authenticated;
-grant select on api.user_profiles to anon, authenticated;
-grant select on api.room_meta_yamls to anon, authenticated;
+revoke all on api.rooms from anon, authenticated;
+revoke all on api.yaml_entries from anon, authenticated;
+revoke all on api.user_profiles from anon, authenticated;
+revoke all on api.room_meta_yamls from anon, authenticated;
+
+grant select (
+  slug,
+  name,
+  description,
+  closes_at,
+  yaml_limit,
+  require_discord_username,
+  secret_mode,
+  created_at
+) on api.rooms to anon, authenticated;
+grant select (
+  room_slug,
+  updated_at
+) on api.room_meta_yamls to anon, authenticated;
 grant execute on function api.extract_root_scalar(text, text) to anon, authenticated;
 grant execute on function api.has_root_game_section(text, text) to anon, authenticated;
 grant execute on function api.player_name_uses_unique_placeholder(text) to anon, authenticated;
-grant execute on function api.create_room(text, text, text, timestamptz, integer, boolean, text) to anon, authenticated;
+grant execute on function api.create_room(text, text, text, timestamptz, integer, boolean, boolean, text) to anon, authenticated;
 grant execute on function api.update_room_meta(text, text, timestamptz, integer, boolean, text) to anon, authenticated;
 grant execute on function api.delete_room(text, text) to anon, authenticated;
 grant execute on function api.upload_yaml_batch(text, text, text, jsonb) to anon, authenticated;
+grant execute on function api.get_uploaded_room_slugs(text) to anon, authenticated;
+grant execute on function api.get_room_entries(text, text) to anon, authenticated;
+grant execute on function api.get_yaml_entry_content(uuid, text) to anon, authenticated;
+grant execute on function api.get_room_yaml_contents(text, text, text) to anon, authenticated;
+grant execute on function api.get_room_meta_yaml_content(text, text) to anon, authenticated;
 grant execute on function api.delete_yaml(uuid, text, text) to anon, authenticated;
+grant execute on function api.get_user_profile(text) to anon, authenticated;
 grant execute on function api.upsert_room_meta_yaml(text, text, text) to anon, authenticated;
 grant execute on function api.delete_room_meta_yaml(text, text) to anon, authenticated;
 grant execute on function api.upsert_user_profile(text, text) to anon, authenticated;

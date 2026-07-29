@@ -21,13 +21,14 @@ Before using this in production, change these Supabase settings:
 
 - Shows a `My Rooms` landing view for rooms this browser created or uploaded to
 - Lets users save an optional Discord username for this browser's cookie-bound profile
-- Lets users create rooms with a name, closing date, description, optional per-user YAML limit, and optional Discord username requirement
+- Lets users create rooms with a name, closing date, description, optional per-user YAML limit, optional Discord username requirement, and optional creation-only Secret mode
 - Uploads `.yaml`, `.yml`, or `.txt` files into a room
 - Splits combined `---`-delimited YAML uploads into individual room entries
 - Lists room YAMLs as one row per player document using the root `name` and `game` fields
 - Validates that each YAML has root `name`, root `game`, and a root section whose key matches the `game` value
 - Rejects duplicate player names inside a room unless the root `name` contains `{player}`, `{PLAYER}`, `{number}`, or `{NUMBER}`
 - Lets room creators edit the room name, closing time, per-user YAML limit, and Discord username requirement
+- Secret rooms remain cookie-bound, hide player names, game names, filenames, and YAML contents from everyone except each uploader, and only let the host download all YAMLs after the room closes
 - Lets room creators upload, replace, and remove a room-level `meta.yaml` without normal player YAML validation or upload-limit counting
 - Lets room creators delete any YAML in their room before the room closes and delete the room itself
 - Lets uploaders replace or delete only their own YAMLs, and only before the room closes
@@ -55,6 +56,7 @@ This is cookie-based capability control, not account auth.
 - Creating a room also creates a room-admin token cookie for that room
 - Only SHA-256 hashes of those tokens are stored in the database
 - Room creation, room updates, uploads, room deletion, YAML deletion, and `meta.yaml` management are enforced server-side in Supabase SQL functions
+- Secret-room YAML content and `meta.yaml` content are fetched through server-side functions instead of direct table reads
 
 If a browser's cookies are cleared, that browser loses its delete rights.
 
@@ -118,7 +120,7 @@ Archipelago YAML documents are stored as raw text instead of being parsed and re
 - multi-document YAML bundles
 - Archipelago-specific conventions layered on top of standard YAML
 
-If you already deployed the older schema, rerun `supabase/schema.sql`. This version moves the app tables/functions into the `api` schema, hardens function execution, adds room metadata fields, adds `submission_id` plus `document_index`, and adds cookie-bound Discord profile fields plus the optional room Discord requirement.
+If you already deployed the older schema, rerun `supabase/schema.sql`. This version moves the app tables/functions into the `api` schema, hardens function execution, adds room metadata fields, adds `submission_id` plus `document_index`, adds cookie-bound Discord profile fields plus the optional room Discord requirement, and adds Secret room mode.
 
 ## Deployment Secret Notes
 

@@ -320,6 +320,24 @@ function sanitizeFilenamePart(value, fallback = "yaml") {
   return cleaned || fallback;
 }
 
+function roomIsSecret(room = state.currentRoom) {
+  return Boolean(room?.secret_mode);
+}
+
+function secretEntryNumber(entry) {
+  const entries = state.currentEntries.length ? state.currentEntries : [entry];
+  const index = entries.findIndex((item) => item.id === entry.id);
+  return index >= 0 ? index + 1 : 1;
+}
+
+function secretSlotName(entry) {
+  return `slot${secretEntryNumber(entry)}`;
+}
+
+function secretGameName(entry) {
+  return `game${secretEntryNumber(entry)}`;
+}
+
 function playerNameUsesUniquePlaceholder(playerName) {
   return /\{(?:player|PLAYER|number|NUMBER)\}/.test(playerName);
 }
@@ -404,7 +422,7 @@ async function fetchRoomsBySlugs(roomSlugs) {
 
   const uniqueSlugs = [...new Set(roomSlugs)].map(sanitizeSlug).filter(Boolean);
   const params = new URLSearchParams({
-    select: "slug,name,description,closes_at,yaml_limit,require_discord_username,created_at",
+    select: "slug,name,description,closes_at,yaml_limit,require_discord_username,secret_mode,created_at",
     order: "closes_at.asc"
   });
   params.set("slug", `in.(${uniqueSlugs.join(",")})`);
@@ -413,17 +431,15 @@ async function fetchRoomsBySlugs(roomSlugs) {
 
 async function fetchMyUploadedRoomSlugs() {
   const uploaderHash = await ensureUploaderHash();
-  const params = new URLSearchParams({
-    select: "room_slug",
-    uploader_token_hash: `eq.${uploaderHash}`
+  const rows = await rpc("get_uploaded_room_slugs", {
+    p_uploader_token_hash: uploaderHash
   });
-  const rows = await apiFetch(`/rest/v1/yaml_entries?${params.toString()}`);
   return [...new Set(rows.map((row) => row.room_slug))];
 }
 
 async function fetchRoomInfo(roomSlug) {
   const params = new URLSearchParams({
-    select: "slug,name,description,closes_at,yaml_limit,require_discord_username,created_at",
+    select: "slug,name,description,closes_at,yaml_limit,require_discord_username,secret_mode,created_at",
     slug: `eq.${roomSlug}`
   });
   const rows = await apiFetch(`/rest/v1/rooms?${params.toString()}`);
@@ -432,11 +448,9 @@ async function fetchRoomInfo(roomSlug) {
 
 async function fetchMyProfile() {
   const uploaderHash = await ensureUploaderHash();
-  const params = new URLSearchParams({
-    select: "discord_username",
-    uploader_token_hash: `eq.${uploaderHash}`
+  const rows = await rpc("get_user_profile", {
+    p_uploader_token_hash: uploaderHash
   });
-  const rows = await apiFetch(`/rest/v1/user_profiles?${params.toString()}`);
   return rows[0] || { discord_username: "" };
 }
 
@@ -477,11 +491,10 @@ function extractRootScalar(content, key) {
 }
 
 async function fetchRoomEntries(roomSlug) {
-  const params = new URLSearchParams({
-    select: "id,label,original_filename,created_at,uploader_token_hash,submission_id,document_index,player_name,game_name,discord_username",
-    room_slug: `eq.${roomSlug}`
+  const rows = await rpc("get_room_entries", {
+    p_room_slug: roomSlug,
+    p_requester_token_hash: state.uploaderTokenHash
   });
-  const rows = await apiFetch(`/rest/v1/yaml_entries?${params.toString()}`);
   return rows
     .map((entry) => ({
       ...entry,
@@ -510,13 +523,12 @@ async function fetchEntryContent(entryId) {
     return entry.content;
   }
 
-  const params = new URLSearchParams({
-    select: "content",
-    id: `eq.${entryId}`
+  const rows = await rpc("get_yaml_entry_content", {
+    p_entry_id: entryId,
+    p_requester_token_hash: state.uploaderTokenHash
   });
-  const rows = await apiFetch(`/rest/v1/yaml_entries?${params.toString()}`);
   if (!rows[0]) {
-    throw new Error("YAML entry was not found.");
+    throw new Error("YAML entry was not found or is not available to this browser.");
   }
 
   const content = rows[0].content || "";
@@ -527,12 +539,30 @@ async function fetchEntryContent(entryId) {
 }
 
 async function hydrateEntryContents(entries) {
-  return Promise.all(
-    entries.map(async (entry) => ({
+  if (!roomIsSecret()) {
+    const rows = await rpc("get_room_yaml_contents", {
+      p_room_slug: state.currentRoom.slug,
+      p_requester_token_hash: state.uploaderTokenHash,
+      p_room_admin_token_hash: await getRoomAdminTokenHash(state.currentRoom.slug)
+    });
+    const contentById = new Map(rows.map((row) => [row.id, row.content || ""]));
+    return entries.map((entry) => ({
       ...entry,
-      content: await fetchEntryContent(entry.id)
-    }))
-  );
+      content: contentById.get(entry.id) || ""
+    }));
+  }
+
+  const adminTokenHash = await getRoomAdminTokenHash(state.currentRoom.slug);
+  const rows = await rpc("get_room_yaml_contents", {
+    p_room_slug: state.currentRoom.slug,
+    p_requester_token_hash: state.uploaderTokenHash,
+    p_room_admin_token_hash: adminTokenHash
+  });
+  const contentById = new Map(rows.map((row) => [row.id, row.content || ""]));
+  return entries.map((entry) => ({
+    ...entry,
+    content: contentById.get(entry.id) || ""
+  }));
 }
 
 async function fetchRoomMetaYaml(roomSlug) {
@@ -553,13 +583,12 @@ async function fetchMetaYamlContent() {
     return metaYaml.content;
   }
 
-  const params = new URLSearchParams({
-    select: "content",
-    room_slug: `eq.${metaYaml.room_slug}`
+  const rows = await rpc("get_room_meta_yaml_content", {
+    p_room_slug: metaYaml.room_slug,
+    p_room_admin_token_hash: await getRoomAdminTokenHash(metaYaml.room_slug)
   });
-  const rows = await apiFetch(`/rest/v1/room_meta_yamls?${params.toString()}`);
   if (!rows[0]) {
-    throw new Error("meta.yaml was not found.");
+    throw new Error("meta.yaml was not found or is not available to this browser.");
   }
 
   metaYaml.content = rows[0].content || "";
@@ -724,10 +753,24 @@ function canDeleteEntry(entry, room) {
   if (roomIsClosed(room)) {
     return false;
   }
+  if (roomIsSecret(room)) {
+    return entry.isMine;
+  }
   if (hasRoomAdminToken(room.slug)) {
     return true;
   }
   return entry.isMine;
+}
+
+function canAccessEntryContent(entry, room) {
+  return !roomIsSecret(room) || entry.isMine;
+}
+
+function canDownloadAllRoomYamls(room) {
+  if (!roomIsSecret(room)) {
+    return true;
+  }
+  return roomIsClosed(room) && hasRoomAdminToken(room.slug);
 }
 
 function getVisibleRoomEntries() {
@@ -752,6 +795,15 @@ function getVisibleRoomEntries() {
 }
 
 function roomEntrySortValue(entry, field) {
+  if (roomIsSecret()) {
+    if (field === "player") {
+      return String(secretEntryNumber(entry)).padStart(8, "0");
+    }
+    if (field === "game") {
+      return String(secretEntryNumber(entry)).padStart(8, "0");
+    }
+  }
+
   if (field === "player" && state.roomTable.showDiscord && state.roomTable.sortByDiscordUsername) {
     return uploaderDisplayName(entry);
   }
@@ -765,6 +817,9 @@ function uploaderDisplayName(entry) {
   }
 
   const uploaderHash = String(entry.uploader_token_hash || "").trim();
+  if (/^uploader\d+$/.test(uploaderHash)) {
+    return `Uploader ${uploaderHash.slice("uploader".length)}`;
+  }
   return uploaderHash ? `Uploader ${uploaderHash.slice(0, 8)}` : "Uploader unknown";
 }
 
@@ -783,6 +838,10 @@ function combinedYaml(entries) {
 }
 
 function entryDownloadName(entry) {
+  if (roomIsSecret()) {
+    return `${secretSlotName(entry)}.yaml`;
+  }
+
   const base = sanitizeFilenamePart(entry.original_filename || entry.player || entry.label || "yaml");
   const submissionCount = state.currentSubmissionCounts.get(entry.submission_id) || 1;
   if (submissionCount > 1) {
@@ -792,6 +851,11 @@ function entryDownloadName(entry) {
 }
 
 function bundleDownloadName(group) {
+  if (roomIsSecret()) {
+    const firstEntry = group.entries[0];
+    return `${firstEntry ? secretSlotName(firstEntry) : "slot"}.yaml`;
+  }
+
   const uploaderName = group.discordUsername || group.displayName;
   return `${sanitizeFilenamePart(state.currentRoom.slug, "room")}-${sanitizeFilenamePart(uploaderName, "uploader")}-bundle.yaml`;
 }
@@ -880,7 +944,9 @@ function renderSidebarRoomContext() {
   const closed = roomIsClosed(room);
   const isCreator = hasRoomAdminToken(room.slug);
   const remainingSlots = getRemainingUploadSlots(room, state.currentEntries);
-  const hasAnyDownloadableYaml = state.currentEntries.length > 0 || Boolean(state.currentMetaYaml);
+  const canUseRoomDownloads = canDownloadAllRoomYamls(room);
+  const hasAnyDownloadableYaml =
+    canUseRoomDownloads && (state.currentEntries.length > 0 || (!roomIsSecret(room) && Boolean(state.currentMetaYaml)));
   const uploadNote = closed
     ? "This room is closed."
     : remainingSlots === null
@@ -905,14 +971,21 @@ function renderSidebarRoomContext() {
             : ""
         }
         ${room.require_discord_username ? '<span class="badge">Discord Required</span>' : ""}
+        ${room.secret_mode ? '<span class="badge">Secret</span>' : ""}
         ${closed ? '<span class="badge">Submissions Closed</span>' : ""}
       </div>
     </div>
     <div class="sidebar-divider"></div>
     <p class="sidebar-section-title">YAML Download</p>
     <div class="sidebar-room-actions">
-      <button id="download-all-yamls" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download YAMLs</button>
-      <button id="download-all-bundles" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download Bundles</button>
+      ${
+        canUseRoomDownloads
+          ? `
+            <button id="download-all-yamls" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download YAMLs</button>
+            <button id="download-all-bundles" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download Bundles</button>
+          `
+          : '<p class="sidebar-room-copy">Secret room downloads open for the host after closing.</p>'
+      }
     </div>
     ${
       isCreator
@@ -1080,6 +1153,7 @@ function attachCreateRoomEvents() {
       const closingInput = String(formData.get("room-closing") || "").trim();
       const description = String(formData.get("room-description") || "").trim();
       const yamlLimitRaw = String(formData.get("yaml-limit") || "").trim();
+      const secretMode = formData.get("secret-mode") === "on";
       const requireDiscordUsername = formData.get("require-discord-username") === "on";
 
       if (!roomName) {
@@ -1105,6 +1179,7 @@ function attachCreateRoomEvents() {
         p_closes_at: closesAt,
         p_yaml_limit: yamlLimit,
         p_require_discord_username: requireDiscordUsername,
+        p_secret_mode: secretMode,
         p_admin_token_hash: adminTokenHash
       });
 
@@ -1288,13 +1363,16 @@ function attachRoomPageEvents() {
   if (downloadAllButton) {
     downloadAllButton.addEventListener("click", async () => {
       try {
+        if (!canDownloadAllRoomYamls(state.currentRoom)) {
+          throw new Error("Secret room downloads open for the host after closing.");
+        }
         const entries = await hydrateEntryContents(state.currentEntries);
         const files = entries.map((entry) => ({
           name: entryDownloadName(entry),
           content: entry.content,
           modifiedAt: entry.created_at
         }));
-        if (state.currentMetaYaml) {
+        if (state.currentMetaYaml && !roomIsSecret()) {
           files.unshift({
             name: metaYamlDownloadName(),
             content: await fetchMetaYamlContent(),
@@ -1316,13 +1394,22 @@ function attachRoomPageEvents() {
   if (downloadBundlesButton) {
     downloadBundlesButton.addEventListener("click", async () => {
       try {
+        if (!canDownloadAllRoomYamls(state.currentRoom)) {
+          throw new Error("Secret room downloads open for the host after closing.");
+        }
         const entries = await hydrateEntryContents(state.currentEntries);
-        const bundleFiles = groupEntriesByUploader(entries).map((group) => ({
-          name: bundleDownloadName(group),
-          content: combinedYaml(group.entries),
-          modifiedAt: group.entries[0]?.created_at || Date.now()
-        }));
-        if (state.currentMetaYaml) {
+        const bundleFiles = roomIsSecret()
+          ? entries.map((entry) => ({
+              name: entryDownloadName(entry),
+              content: entry.content,
+              modifiedAt: entry.created_at
+            }))
+          : groupEntriesByUploader(entries).map((group) => ({
+              name: bundleDownloadName(group),
+              content: combinedYaml(group.entries),
+              modifiedAt: group.entries[0]?.created_at || Date.now()
+            }));
+        if (state.currentMetaYaml && !roomIsSecret()) {
           bundleFiles.unshift({
             name: metaYamlDownloadName(),
             content: await fetchMetaYamlContent(),
@@ -1375,6 +1462,7 @@ async function openEditRoomModal() {
           <input name="require-discord-username" type="checkbox" ${room.require_discord_username ? "checked" : ""}>
           <span>Require Discord username to upload</span>
         </label>
+        ${room.secret_mode ? '<p class="field-help">This room is Secret. Secret mode is creation-only and remains cookie-bound to each uploader.</p>' : ""}
         <div class="action-row">
           <button type="submit">Save Changes</button>
           <button id="edit-room-cancel" type="button" class="secondary">Cancel</button>
@@ -1607,7 +1695,7 @@ function openDeleteEntryModal(entryId) {
 
   showConfirmModal({
     title: "Delete YAML",
-    message: `Remove ${entry.player} from ${room.name}?`,
+    message: `Remove ${roomIsSecret(room) ? secretSlotName(entry) : entry.player} from ${room.name}?`,
     confirmLabel: "Delete YAML",
     onConfirm: async () => {
       const adminTokenHash = await getRoomAdminTokenHash(room.slug);
@@ -1815,6 +1903,9 @@ function renderRoomsPage() {
           if (room.require_discord_username) {
             badges.push('<span class="badge">Discord Required</span>');
           }
+          if (room.secret_mode) {
+            badges.push('<span class="badge">Secret</span>');
+          }
 
           return `
             <article class="room-list-item">
@@ -1879,6 +1970,11 @@ function renderCreateRoomPage() {
           <input name="require-discord-username" type="checkbox">
           <span>Require Discord username to upload</span>
         </label>
+        <label class="checkbox">
+          <input id="secret-mode-toggle" name="secret-mode" type="checkbox">
+          <span>Secret room</span>
+        </label>
+        <p class="field-help">Secret rooms hide player names, game names, filenames, and YAML contents from everyone except each uploader. The host can download all YAMLs only after the room closes.</p>
         <div class="action-row">
           <button type="submit">Create Room</button>
         </div>
@@ -1967,11 +2063,15 @@ function renderRoomPage() {
   const tableRows = visibleEntries.length
     ? visibleEntries
         .map((entry) => {
+          const displayPlayer = roomIsSecret(room) ? secretSlotName(entry) : entry.player;
+          const displayGame = roomIsSecret(room) ? secretGameName(entry) : entry.game;
           const uploaderName = state.roomTable.showDiscord ? uploaderDisplayName(entry) : "";
-          const actions = [
-            `<button type="button" class="ghost" data-view-entry="${escapeHtml(entry.id)}">View YAML</button>`,
-            `<button type="button" class="ghost" data-download-entry="${escapeHtml(entry.id)}">Download</button>`
-          ];
+          const actions = canAccessEntryContent(entry, room)
+            ? [
+                `<button type="button" class="ghost" data-view-entry="${escapeHtml(entry.id)}">View YAML</button>`,
+                `<button type="button" class="ghost" data-download-entry="${escapeHtml(entry.id)}">Download</button>`
+              ]
+            : [];
           if (canDeleteEntry(entry, room)) {
             actions.push(`<button type="button" class="danger" data-delete-entry="${escapeHtml(entry.id)}">Delete</button>`);
           }
@@ -1980,13 +2080,13 @@ function renderRoomPage() {
             <tr>
               <td>
                 <div class="player-cell">
-                  <span class="player-name">${escapeHtml(entry.player)}</span>
+                  <span class="player-name">${escapeHtml(displayPlayer)}</span>
                   ${uploaderName ? `<span class="uploader-name">${escapeHtml(uploaderName)}</span>` : ""}
                 </div>
               </td>
-              <td>${escapeHtml(entry.game)}</td>
+              <td>${escapeHtml(displayGame)}</td>
               <td>
-                <div class="inline-row">${actions.join("")}</div>
+                <div class="inline-row">${actions.length ? actions.join("") : '<span class="meta-copy">Private</span>'}</div>
               </td>
             </tr>
           `;
@@ -2002,7 +2102,7 @@ function renderRoomPage() {
     ? `Updated: ${escapeHtml(formatDateTime(metaYaml.updated_at))}`
     : "No meta.yaml has been uploaded for this room.";
   const metaActions = [];
-  if (metaYaml) {
+  if (metaYaml && (!roomIsSecret(room) || isCreator)) {
     metaActions.push('<button id="view-meta-yaml" type="button" class="secondary">View meta.yaml</button>');
     metaActions.push('<button id="download-meta-yaml" type="button" class="secondary">Download meta.yaml</button>');
   }
