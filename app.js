@@ -20,6 +20,7 @@ const ROOM_SHOW_DISCORD_COOKIE = "yamlcollector_room_show_discord";
 const ROOM_SORT_DISCORD_COOKIE = "yamlcollector_room_sort_discord";
 const API_SCHEMA = "api";
 const COMBINED_SEPARATOR = "\n\n---\n\n";
+const SECRET_EXPORT_MODIFIED_AT = "1980-01-01T00:00:00Z";
 
 const state = {
   configReady: false,
@@ -293,6 +294,40 @@ function createToken() {
   const bytes = new Uint8Array(24);
   window.crypto.getRandomValues(bytes);
   return bytesToHex(bytes);
+}
+
+function randomInt(maxExclusive) {
+  if (maxExclusive <= 0) {
+    return 0;
+  }
+
+  const maxUint32 = 0x100000000;
+  const limit = maxUint32 - (maxUint32 % maxExclusive);
+  const value = new Uint32Array(1);
+  do {
+    window.crypto.getRandomValues(value);
+  } while (value[0] >= limit);
+  return value[0] % maxExclusive;
+}
+
+function shuffledCopy(items) {
+  const shuffled = items.slice();
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = randomInt(index + 1);
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled;
+}
+
+function randomSecretExportName(usedNames) {
+  let name = "";
+  do {
+    const bytes = new Uint8Array(8);
+    window.crypto.getRandomValues(bytes);
+    name = `yaml-${bytesToHex(bytes)}.yaml`;
+  } while (usedNames.has(name));
+  usedNames.add(name);
+  return name;
 }
 
 function generateRoomSlug() {
@@ -860,6 +895,15 @@ function bundleDownloadName(group) {
   return `${sanitizeFilenamePart(state.currentRoom.slug, "room")}-${sanitizeFilenamePart(uploaderName, "uploader")}-bundle.yaml`;
 }
 
+function secretExportFiles(entries) {
+  const usedNames = new Set();
+  return shuffledCopy(entries).map((entry) => ({
+    name: randomSecretExportName(usedNames),
+    content: entry.content,
+    modifiedAt: SECRET_EXPORT_MODIFIED_AT
+  }));
+}
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -1367,11 +1411,13 @@ function attachRoomPageEvents() {
           throw new Error("Secret room downloads open for the host after closing.");
         }
         const entries = await hydrateEntryContents(state.currentEntries);
-        const files = entries.map((entry) => ({
-          name: entryDownloadName(entry),
-          content: entry.content,
-          modifiedAt: entry.created_at
-        }));
+        const files = roomIsSecret()
+          ? secretExportFiles(entries)
+          : entries.map((entry) => ({
+              name: entryDownloadName(entry),
+              content: entry.content,
+              modifiedAt: entry.created_at
+            }));
         if (state.currentMetaYaml && !roomIsSecret()) {
           files.unshift({
             name: metaYamlDownloadName(),
@@ -1399,11 +1445,7 @@ function attachRoomPageEvents() {
         }
         const entries = await hydrateEntryContents(state.currentEntries);
         const bundleFiles = roomIsSecret()
-          ? entries.map((entry) => ({
-              name: entryDownloadName(entry),
-              content: entry.content,
-              modifiedAt: entry.created_at
-            }))
+          ? secretExportFiles(entries)
           : groupEntriesByUploader(entries).map((group) => ({
               name: bundleDownloadName(group),
               content: combinedYaml(group.entries),

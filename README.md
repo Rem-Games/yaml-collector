@@ -28,7 +28,7 @@ Before using this in production, change these Supabase settings:
 - Validates that each YAML has root `name`, root `game`, and a root section whose key matches the `game` value
 - Rejects duplicate player names inside a room unless the root `name` contains `{player}`, `{PLAYER}`, `{number}`, or `{NUMBER}`
 - Lets room creators edit the room name, closing time, per-user YAML limit, and Discord username requirement
-- Secret rooms remain cookie-bound, hide player names, game names, filenames, and YAML contents from everyone except each uploader, and only let the host download all YAMLs after the room closes
+- Secret rooms remain cookie-bound, hide player names, game names, filenames, and YAML contents from everyone except each uploader, and only let the host download randomized, timestamp-normalized YAML exports after the room closes
 - Lets room creators upload, replace, and remove a room-level `meta.yaml` without normal player YAML validation or upload-limit counting
 - Lets room creators delete any YAML in their room before the room closes and delete the room itself
 - Lets uploaders replace or delete only their own YAMLs, and only before the room closes
