@@ -278,6 +278,7 @@ drop function if exists api.delete_room_meta_yaml(text, text);
 drop function if exists api.update_room_meta(text, text, timestamptz, text);
 drop function if exists api.update_room_meta(text, text, timestamptz, boolean, text);
 drop function if exists api.update_room_meta(text, text, timestamptz, integer, boolean, text);
+drop function if exists api.update_room_meta(text, text, text, timestamptz, integer, boolean, text);
 drop function if exists api.delete_room(text, text);
 drop function if exists api.delete_yaml(uuid, text, text);
 drop function if exists api.get_user_profile(text);
@@ -459,6 +460,7 @@ $$;
 create or replace function api.update_room_meta(
   p_room_slug text,
   p_name text,
+  p_description text,
   p_closes_at timestamptz,
   p_yaml_limit integer,
   p_require_discord_username boolean,
@@ -490,6 +492,7 @@ begin
 
   update api.rooms
   set name = left(trim(p_name), 80),
+      description = left(coalesce(trim(p_description), ''), 2000),
       closes_at = p_closes_at,
       yaml_limit = p_yaml_limit,
       require_discord_username = coalesce(p_require_discord_username, false)
@@ -805,7 +808,10 @@ begin
       when n.secret_mode and n.uploader_token_hash <> coalesce(p_requester_token_hash, '') then 'game' || n.slot_number::text
       else n.game_name
     end as game_name,
-    n.discord_username
+    case
+      when n.secret_mode and n.uploader_token_hash <> coalesce(p_requester_token_hash, '') then null
+      else n.discord_username
+    end as discord_username
   from numbered_entries as n
   order by n.created_at, n.document_index, n.id;
 end;
@@ -1142,7 +1148,7 @@ grant execute on function api.extract_root_scalar(text, text) to anon, authentic
 grant execute on function api.has_root_game_section(text, text) to anon, authenticated;
 grant execute on function api.player_name_uses_unique_placeholder(text) to anon, authenticated;
 grant execute on function api.create_room(text, text, text, timestamptz, integer, boolean, boolean, text) to anon, authenticated;
-grant execute on function api.update_room_meta(text, text, timestamptz, integer, boolean, text) to anon, authenticated;
+grant execute on function api.update_room_meta(text, text, text, timestamptz, integer, boolean, text) to anon, authenticated;
 grant execute on function api.delete_room(text, text) to anon, authenticated;
 grant execute on function api.upload_yaml_batch(text, text, text, jsonb) to anon, authenticated;
 grant execute on function api.get_uploaded_room_slugs(text) to anon, authenticated;

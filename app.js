@@ -1489,6 +1489,10 @@ async function openEditRoomModal() {
           <input name="room-closing" type="datetime-local" required value="${escapeHtml(isoToLocalInput(room.closes_at))}">
         </label>
         <label class="field">
+          <span>Room Description</span>
+          <textarea name="room-description" rows="5" maxlength="2000" placeholder="Optional room description">${escapeHtml(room.description || "")}</textarea>
+        </label>
+        <label class="field">
           <span>YAML Limit Per User</span>
           <input
             name="yaml-limit"
@@ -1519,6 +1523,7 @@ async function openEditRoomModal() {
         const formData = new FormData(event.currentTarget);
         const roomName = String(formData.get("room-name") || "").trim();
         const closesAt = localInputToIso(String(formData.get("room-closing") || "").trim());
+        const description = String(formData.get("room-description") || "").trim();
         const yamlLimitRaw = String(formData.get("yaml-limit") || "").trim();
         const requireDiscordUsername = formData.get("require-discord-username") === "on";
         if (!roomName || !closesAt) {
@@ -1541,6 +1546,7 @@ async function openEditRoomModal() {
         await rpc("update_room_meta", {
           p_room_slug: room.slug,
           p_name: roomName,
+          p_description: description,
           p_closes_at: closesAt,
           p_yaml_limit: yamlLimit,
           p_require_discord_username: requireDiscordUsername,
