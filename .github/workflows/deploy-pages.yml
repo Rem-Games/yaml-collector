@@ -36,6 +36,8 @@ jobs:
 
       - name: Create runtime config
         env:
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
@@ -43,7 +45,8 @@ jobs:
           cat > config.js <<EOF
           window.APP_CONFIG = {
             supabaseUrl: "${SUPABASE_URL}",
-            supabaseKey: "${SUPABASE_KEY}"
+            supabaseKey: "${SUPABASE_KEY}",
+            sourceRepositoryUrl: "${GITHUB_SERVER_URL}/${SOURCE_REPOSITORY}"
           };
           EOF
 

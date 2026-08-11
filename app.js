@@ -21,6 +21,8 @@ const ROOM_SORT_DISCORD_COOKIE = "yamlcollector_room_sort_discord";
 const API_SCHEMA = "api";
 const COMBINED_SEPARATOR = "\n\n---\n\n";
 const SECRET_EXPORT_MODIFIED_AT = "1980-01-01T00:00:00Z";
+const ORIGINAL_REPOSITORY_URL = "https://github.com/Rem-Games/yaml-collector";
+const ORIGINAL_REPOSITORY_LICENSE_URL = `${ORIGINAL_REPOSITORY_URL}/blob/main/LICENSE`;
 
 const state = {
   configReady: false,
@@ -183,6 +185,35 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function safeHttpUrl(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+function normalizeRepositoryUrl(value) {
+  return safeHttpUrl(value).replace(/\/$/, "").toLowerCase();
+}
+
+function getSiteMetadata() {
+  const config = window.APP_CONFIG || {};
+  const configuredSourceRepositoryUrl = safeHttpUrl(config.sourceRepositoryUrl);
+  const sourceRepositoryUrl = configuredSourceRepositoryUrl || ORIGINAL_REPOSITORY_URL;
+
+  return {
+    originalRepositoryUrl: ORIGINAL_REPOSITORY_URL,
+    sourceRepositoryUrl,
+    licenseUrl: ORIGINAL_REPOSITORY_LICENSE_URL
+  };
 }
 
 function getConfig() {
@@ -2068,6 +2099,12 @@ function renderProfilePage() {
 }
 
 function renderAboutPage() {
+  const metadata = getSiteMetadata();
+  const builtFromMarkup =
+    normalizeRepositoryUrl(metadata.sourceRepositoryUrl) &&
+    normalizeRepositoryUrl(metadata.sourceRepositoryUrl) !== normalizeRepositoryUrl(metadata.originalRepositoryUrl)
+      ? `<p class="content-copy">This build was published from <a href="${escapeHtml(metadata.sourceRepositoryUrl)}" target="_blank" rel="noopener noreferrer">this repository</a>.</p>`
+      : "";
   const setupMarkup = state.configReady
     ? ""
     : `
@@ -2082,6 +2119,9 @@ function renderAboutPage() {
       <div class="about-copy content-grid">
         <p class="content-copy">Entries and room permissions are cookie bound. If you delete your cookie, you lose the ability to modify your data from that browser.</p>
         <p class="content-copy">Created by Rem.</p>
+        <p class="content-copy">Source code: <a href="${escapeHtml(metadata.originalRepositoryUrl)}" target="_blank" rel="noopener noreferrer">GitHub repository</a>.</p>
+        ${builtFromMarkup}
+        <p class="content-copy">Copyright &copy; Rem. See the <a href="${escapeHtml(metadata.licenseUrl)}" target="_blank" rel="noopener noreferrer">copyright and license terms</a>.</p>
         ${setupMarkup}
       </div>
     </section>
