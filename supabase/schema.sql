@@ -59,7 +59,8 @@ create table if not exists api.yaml_entries (
   original_filename text,
   content text not null check (char_length(content) between 1 and 1000000),
   uploader_token_hash text not null check (char_length(uploader_token_hash) = 64),
-  created_at timestamptz not null default timezone('utc', now())
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
 );
 
 create table if not exists api.user_profiles (
@@ -147,6 +148,19 @@ alter table api.yaml_entries
 
 alter table api.yaml_entries
   add column if not exists discord_username text;
+
+alter table api.yaml_entries
+  add column if not exists updated_at timestamptz;
+
+update api.yaml_entries
+set updated_at = coalesce(updated_at, created_at, timezone('utc', now()))
+where updated_at is null;
+
+alter table api.yaml_entries
+  alter column updated_at set default timezone('utc', now());
+
+alter table api.yaml_entries
+  alter column updated_at set not null;
 
 update api.yaml_entries
 set discord_username = ''
@@ -694,7 +708,8 @@ begin
         discord_username = v_discord_username,
         label = v_label,
         original_filename = v_filename,
-        content = v_content
+        content = v_content,
+        updated_at = timezone('utc', now())
       where id = v_existing_entry.id
       returning * into v_entry;
     else
@@ -746,6 +761,7 @@ returns table (
   label text,
   original_filename text,
   created_at timestamptz,
+  updated_at timestamptz,
   uploader_token_hash text,
   submission_id uuid,
   document_index integer,
@@ -794,6 +810,7 @@ begin
       else n.original_filename
     end as original_filename,
     n.created_at,
+    n.updated_at,
     case
       when n.uploader_token_hash = coalesce(p_requester_token_hash, '') then n.uploader_token_hash
       else 'uploader' || n.uploader_number::text
@@ -864,6 +881,7 @@ returns table (
   discord_username text,
   uploader_token_hash text,
   created_at timestamptz,
+  updated_at timestamptz,
   content text
 )
 language plpgsql
@@ -930,6 +948,7 @@ begin
       else 'uploader' || n.uploader_number::text
     end as uploader_token_hash,
     n.created_at,
+    n.updated_at,
     n.content
   from numbered_entries as n
   order by n.created_at, n.document_index, n.id;

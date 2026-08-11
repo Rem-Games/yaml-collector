@@ -401,8 +401,120 @@ textarea {
   cursor: help;
 }
 
-.room-yamls-toggles {
-  justify-content: flex-end;
+.room-yamls-filter {
+  position: relative;
+  display: grid;
+  justify-items: end;
+  gap: 0;
+}
+
+.filter-options {
+  display: grid;
+  justify-items: start;
+  gap: 0.7rem;
+  max-width: min(100%, 48rem);
+  max-height: 18rem;
+  overflow: hidden;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(6, 11, 16, 0.72);
+  opacity: 1;
+  transform: translateY(0) scaleY(1);
+  transform-origin: top right;
+  transition:
+    max-height 280ms ease,
+    margin-top 280ms ease,
+    padding 280ms ease,
+    border-width 280ms ease,
+    opacity 220ms ease,
+    transform 280ms ease;
+}
+
+.filter-options.collapsed {
+  margin-top: 0;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-top-width: 0;
+  border-bottom-width: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-0.45rem) scaleY(0.94);
+}
+
+.filter-options.expanded {
+  margin-top: 0.55rem;
+  max-height: 18rem;
+  opacity: 1;
+  transform: translateY(0) scaleY(1);
+}
+
+.filter-option-group {
+  display: grid;
+  justify-items: start;
+  gap: 0;
+}
+
+.dependent-option {
+  min-width: 0;
+  overflow: hidden;
+  transform-origin: top;
+}
+
+.dependent-option.expanded {
+  max-height: 2.6rem;
+  margin-top: 0.7rem;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.dependent-option.collapsed {
+  max-height: 0;
+  margin-top: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-0.45rem);
+}
+
+.dependent-option.animate-dependent-option.expanded {
+  animation: dependent-option-slide-out 270ms ease-out;
+}
+
+.dependent-option.animate-dependent-option.collapsed {
+  animation: dependent-option-slide-in 240ms ease-in;
+}
+
+@keyframes dependent-option-slide-out {
+  from {
+    max-height: 0;
+    margin-top: 0;
+    opacity: 0;
+    transform: translateY(-0.45rem);
+  }
+
+  to {
+    max-height: 2.6rem;
+    margin-top: 0.7rem;
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes dependent-option-slide-in {
+  from {
+    max-height: 2.6rem;
+    margin-top: 0.7rem;
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  to {
+    max-height: 0;
+    margin-top: 0;
+    opacity: 0;
+    transform: translateY(-0.45rem);
+  }
 }
 
 .badge {
@@ -437,6 +549,85 @@ textarea {
   font-size: 0.82rem;
   line-height: 1.2;
   white-space: nowrap;
+}
+
+.timestamp-cell {
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.room-animation-discord-on .uploader-name {
+  animation: username-slide-in 405ms ease-out;
+}
+
+.room-animation-timestamp-on .timestamp-cell {
+  animation: timestamp-slide-in 405ms ease-out;
+}
+
+.room-animation-discord-sort .player-header-label {
+  animation: header-slide-in 360ms ease-out;
+}
+
+@keyframes username-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(0.8rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes timestamp-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-0.8rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes header-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(0.8rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes header-slide-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(-0.8rem);
+  }
+}
+
+::view-transition-group(*) {
+  animation-duration: 420ms;
+  animation-timing-function: ease;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+}
+
+::view-transition-old(root) {
+  opacity: 0;
 }
 
 .stat-grid {
@@ -784,8 +975,8 @@ tbody tr:last-child td {
     text-align: left;
   }
 
-  .room-yamls-toggles {
-    justify-content: flex-start;
+  .room-yamls-filter {
+    justify-items: start;
   }
 
   th,

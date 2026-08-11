@@ -18,11 +18,14 @@ const UPLOADER_COOKIE = "yamlcollector_uploader_token";
 const YAML_WORD_WRAP_COOKIE = "yamlcollector_yaml_word_wrap";
 const ROOM_SHOW_DISCORD_COOKIE = "yamlcollector_room_show_discord";
 const ROOM_SORT_DISCORD_COOKIE = "yamlcollector_room_sort_discord";
+const ROOM_SHOW_TIMESTAMPS_COOKIE = "yamlcollector_room_show_timestamps";
+const ROOM_RELATIVE_TIMESTAMPS_COOKIE = "yamlcollector_room_relative_timestamps";
 const API_SCHEMA = "api";
 const COMBINED_SEPARATOR = "\n\n---\n\n";
 const SECRET_EXPORT_MODIFIED_AT = "1980-01-01T00:00:00Z";
 const ORIGINAL_REPOSITORY_URL = "https://github.com/Rem-Games/yaml-collector";
 const ORIGINAL_REPOSITORY_LICENSE_URL = `${ORIGINAL_REPOSITORY_URL}/blob/main/LICENSE`;
+const DEPENDENT_OPTION_ANIMATION_MS = 320;
 
 const state = {
   configReady: false,
@@ -40,8 +43,14 @@ const state = {
     sortField: "player",
     sortDirection: "asc",
     onlyMine: false,
+    filterOptionsOpen: false,
+    animatedDependentOption: null,
     showDiscord: roomShowDiscordEnabled(),
-    sortByDiscordUsername: roomSortDiscordEnabled()
+    appliedShowDiscord: roomShowDiscordEnabled(),
+    sortByDiscordUsername: roomSortDiscordEnabled(),
+    showTimestamps: roomShowTimestampsEnabled(),
+    appliedShowTimestamps: roomShowTimestampsEnabled(),
+    relativeTimestamps: roomRelativeTimestampsEnabled()
   },
   pendingUploadRoom: null,
   pendingMetaUploadRoom: null,
@@ -285,13 +294,28 @@ function roomSortDiscordEnabled() {
   return roomShowDiscordEnabled() && getCookie(ROOM_SORT_DISCORD_COOKIE) === "on";
 }
 
+function roomShowTimestampsEnabled() {
+  return getCookie(ROOM_SHOW_TIMESTAMPS_COOKIE) === "on";
+}
+
+function roomRelativeTimestampsEnabled() {
+  return roomShowTimestampsEnabled() && getCookie(ROOM_RELATIVE_TIMESTAMPS_COOKIE) === "on";
+}
+
 function defaultRoomTableState() {
+  const showTimestamps = roomShowTimestampsEnabled();
   return {
     sortField: "player",
     sortDirection: "asc",
     onlyMine: false,
+    filterOptionsOpen: false,
+    animatedDependentOption: null,
     showDiscord: roomShowDiscordEnabled(),
-    sortByDiscordUsername: roomSortDiscordEnabled()
+    appliedShowDiscord: roomShowDiscordEnabled(),
+    sortByDiscordUsername: roomSortDiscordEnabled(),
+    showTimestamps,
+    appliedShowTimestamps: showTimestamps,
+    relativeTimestamps: roomRelativeTimestampsEnabled()
   };
 }
 
@@ -565,6 +589,7 @@ async function fetchRoomEntries(roomSlug) {
     .map((entry) => ({
       ...entry,
       document_index: entry.document_index || 1,
+      updated_at: entry.updated_at || entry.created_at,
       player: entry.player_name || "Unknown Player",
       game: entry.game_name || "Unknown Game",
       discordUsername: entry.discord_username || "",
@@ -769,6 +794,41 @@ function formatDateTime(value) {
   }
 }
 
+function formatRelativeTime(value) {
+  const date = new Date(value);
+  const timestamp = date.getTime();
+  if (!value || Number.isNaN(timestamp)) {
+    return "Unknown";
+  }
+
+  const secondsAgo = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  const units = [
+    ["year", 31536000],
+    ["month", 2592000],
+    ["week", 604800],
+    ["day", 86400],
+    ["hour", 3600],
+    ["minute", 60],
+    ["second", 1]
+  ];
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  for (const [unit, seconds] of units) {
+    if (secondsAgo >= seconds || unit === "second") {
+      return formatter.format(-Math.floor(secondsAgo / seconds), unit);
+    }
+  }
+  return "just now";
+}
+
+function roomEntryTimestamp(entry) {
+  return entry.updated_at || entry.created_at;
+}
+
+function formatRoomEntryTimestamp(entry) {
+  const timestamp = roomEntryTimestamp(entry);
+  return state.roomTable.relativeTimestamps ? formatRelativeTime(timestamp) : formatDateTime(timestamp);
+}
+
 function isoToLocalInput(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -850,7 +910,9 @@ function getVisibleRoomEntries() {
   filtered.sort((left, right) => {
     const leftValue = roomEntrySortValue(left, field);
     const rightValue = roomEntrySortValue(right, field);
-    const compare = leftValue.localeCompare(rightValue, undefined, { sensitivity: "base" });
+    const compare = field === "timestamp"
+      ? leftValue - rightValue
+      : leftValue.localeCompare(rightValue, undefined, { sensitivity: "base" });
     if (compare !== 0) {
       return compare * direction;
     }
@@ -861,6 +923,10 @@ function getVisibleRoomEntries() {
 }
 
 function roomEntrySortValue(entry, field) {
+  if (field === "timestamp") {
+    return roomIsSecret() ? 0 : new Date(roomEntryTimestamp(entry)).getTime() || 0;
+  }
+
   if (roomIsSecret()) {
     if (field === "player") {
       return String(secretEntryNumber(entry)).padStart(8, "0");
@@ -870,7 +936,7 @@ function roomEntrySortValue(entry, field) {
     }
   }
 
-  if (field === "player" && state.roomTable.showDiscord && state.roomTable.sortByDiscordUsername) {
+  if (field === "player" && state.roomTable.appliedShowDiscord && state.roomTable.sortByDiscordUsername) {
     return uploaderDisplayName(entry);
   }
   return String(entry[field] || "");
@@ -889,14 +955,66 @@ function uploaderDisplayName(entry) {
   return uploaderHash ? `Uploader ${uploaderHash.slice(0, 8)}` : "Uploader unknown";
 }
 
-function nextSortDirection(field) {
-  if (state.roomTable.sortField === field) {
-    state.roomTable.sortDirection = state.roomTable.sortDirection === "asc" ? "desc" : "asc";
-  } else {
-    state.roomTable.sortField = field;
-    state.roomTable.sortDirection = "asc";
+function roomViewTransitionName(prefix, value) {
+  return `${prefix}-${String(value || "").replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+}
+
+function animateRoomPageUpdate(reason, updateState) {
+  state.roomTable.roomAnimation = reason;
+  const applyUpdate = () => {
+    updateState();
+    renderRoomPage();
+  };
+
+  if (document.startViewTransition) {
+    const transition = document.startViewTransition(applyUpdate);
+    transition.finished.finally(() => {
+      if (state.roomTable.roomAnimation === reason) {
+        state.roomTable.roomAnimation = null;
+      }
+    });
+    return;
   }
-  renderRoomPage();
+
+  applyUpdate();
+  window.setTimeout(() => {
+    if (state.roomTable.roomAnimation === reason) {
+      state.roomTable.roomAnimation = null;
+    }
+  }, 360);
+}
+
+function queueDependentOptionAnimation(optionName) {
+  state.roomTable.animatedDependentOption = optionName;
+  if (state.roomTable.dependentAnimationTimer) {
+    window.clearTimeout(state.roomTable.dependentAnimationTimer);
+  }
+  state.roomTable.dependentAnimationTimer = window.setTimeout(() => {
+    if (state.roomTable.animatedDependentOption === optionName) {
+      state.roomTable.animatedDependentOption = null;
+    }
+    state.roomTable.dependentAnimationTimer = null;
+  }, DEPENDENT_OPTION_ANIMATION_MS);
+}
+
+function clearDependentOptionAnimation() {
+  if (state.roomTable.dependentAnimationTimer) {
+    window.clearTimeout(state.roomTable.dependentAnimationTimer);
+  }
+  state.roomTable.animatedDependentOption = null;
+  state.roomTable.dependentAnimationTimer = null;
+}
+
+function nextSortDirection(field) {
+  clearDependentOptionAnimation();
+  animateRoomPageUpdate("sort", () => {
+    if (state.roomTable.sortField === field) {
+      state.roomTable.sortDirection = state.roomTable.sortDirection === "asc" ? "desc" : "asc";
+    } else {
+      state.roomTable.sortField = field;
+      state.roomTable.sortDirection = field === "timestamp" ? "desc" : "asc";
+    }
+  });
 }
 
 function combinedYaml(entries) {
@@ -1377,8 +1495,32 @@ function attachRoomPageEvents() {
   if (mineToggle) {
     mineToggle.checked = state.roomTable.onlyMine;
     mineToggle.addEventListener("change", () => {
-      state.roomTable.onlyMine = mineToggle.checked;
-      renderRoomPage();
+      clearDependentOptionAnimation();
+      animateRoomPageUpdate(mineToggle.checked ? "only-mine-on" : "only-mine-off", () => {
+        state.roomTable.onlyMine = mineToggle.checked;
+      });
+    });
+  }
+
+  const filterOptionsButton = document.querySelector("#filter-options-toggle");
+  if (filterOptionsButton) {
+    filterOptionsButton.addEventListener("click", () => {
+      clearDependentOptionAnimation();
+      state.roomTable.filterOptionsOpen = !state.roomTable.filterOptionsOpen;
+      const filterOptions = document.querySelector("#room-filter-options");
+      if (filterOptions) {
+        filterOptionsButton.setAttribute("aria-expanded", state.roomTable.filterOptionsOpen ? "true" : "false");
+        filterOptions.classList.toggle("expanded", state.roomTable.filterOptionsOpen);
+        filterOptions.classList.toggle("collapsed", !state.roomTable.filterOptionsOpen);
+        filterOptions.setAttribute("aria-hidden", state.roomTable.filterOptionsOpen ? "false" : "true");
+        if (state.roomTable.filterOptionsOpen) {
+          filterOptions.removeAttribute("inert");
+        } else {
+          filterOptions.setAttribute("inert", "");
+        }
+      } else {
+        renderRoomPage();
+      }
     });
   }
 
@@ -1386,13 +1528,59 @@ function attachRoomPageEvents() {
   if (discordToggle) {
     discordToggle.checked = state.roomTable.showDiscord;
     discordToggle.addEventListener("change", () => {
-      state.roomTable.showDiscord = discordToggle.checked;
-      setCookie(ROOM_SHOW_DISCORD_COOKIE, state.roomTable.showDiscord ? "on" : "off");
-      if (!state.roomTable.showDiscord) {
-        state.roomTable.sortByDiscordUsername = false;
-        setCookie(ROOM_SORT_DISCORD_COOKIE, "off");
-      }
+      const showDiscord = discordToggle.checked;
+      queueDependentOptionAnimation("discord");
+      state.roomTable.showDiscord = showDiscord;
+      setCookie(ROOM_SHOW_DISCORD_COOKIE, showDiscord ? "on" : "off");
       renderRoomPage();
+      window.setTimeout(() => {
+        animateRoomPageUpdate(showDiscord ? "discord-on" : "discord-off", () => {
+          state.roomTable.appliedShowDiscord = showDiscord;
+          if (!showDiscord) {
+            state.roomTable.sortByDiscordUsername = false;
+            setCookie(ROOM_SORT_DISCORD_COOKIE, "off");
+          }
+        });
+      }, DEPENDENT_OPTION_ANIMATION_MS);
+    });
+  }
+
+  const timestampToggle = document.querySelector("#show-timestamps-toggle");
+  if (timestampToggle) {
+    timestampToggle.checked = state.roomTable.showTimestamps;
+    timestampToggle.addEventListener("change", () => {
+      const showTimestamps = timestampToggle.checked;
+      queueDependentOptionAnimation("timestamp");
+      state.roomTable.showTimestamps = showTimestamps;
+      setCookie(ROOM_SHOW_TIMESTAMPS_COOKIE, showTimestamps ? "on" : "off");
+      renderRoomPage();
+      window.setTimeout(() => {
+        animateRoomPageUpdate(showTimestamps ? "timestamp-on" : "timestamp-off", () => {
+          state.roomTable.appliedShowTimestamps = showTimestamps;
+          if (showTimestamps) {
+            return;
+          } else {
+            state.roomTable.relativeTimestamps = false;
+            setCookie(ROOM_RELATIVE_TIMESTAMPS_COOKIE, "off");
+            if (state.roomTable.sortField === "timestamp") {
+              state.roomTable.sortField = "player";
+              state.roomTable.sortDirection = "asc";
+            }
+          }
+        });
+      }, DEPENDENT_OPTION_ANIMATION_MS);
+    });
+  }
+
+  const relativeTimestampToggle = document.querySelector("#relative-timestamps-toggle");
+  if (relativeTimestampToggle) {
+    relativeTimestampToggle.checked = state.roomTable.relativeTimestamps;
+    relativeTimestampToggle.addEventListener("change", () => {
+      clearDependentOptionAnimation();
+      animateRoomPageUpdate("relative-timestamp", () => {
+        state.roomTable.relativeTimestamps = relativeTimestampToggle.checked;
+        setCookie(ROOM_RELATIVE_TIMESTAMPS_COOKIE, state.roomTable.relativeTimestamps ? "on" : "off");
+      });
     });
   }
 
@@ -1400,9 +1588,11 @@ function attachRoomPageEvents() {
   if (discordSortToggle) {
     discordSortToggle.checked = state.roomTable.sortByDiscordUsername;
     discordSortToggle.addEventListener("change", () => {
-      state.roomTable.sortByDiscordUsername = discordSortToggle.checked;
-      setCookie(ROOM_SORT_DISCORD_COOKIE, state.roomTable.sortByDiscordUsername ? "on" : "off");
-      renderRoomPage();
+      clearDependentOptionAnimation();
+      animateRoomPageUpdate("discord-sort", () => {
+        state.roomTable.sortByDiscordUsername = discordSortToggle.checked;
+        setCookie(ROOM_SORT_DISCORD_COOKIE, state.roomTable.sortByDiscordUsername ? "on" : "off");
+      });
     });
   }
 
@@ -1447,7 +1637,7 @@ function attachRoomPageEvents() {
           : entries.map((entry) => ({
               name: entryDownloadName(entry),
               content: entry.content,
-              modifiedAt: entry.created_at
+              modifiedAt: roomEntryTimestamp(entry)
             }));
         if (state.currentMetaYaml && !roomIsSecret()) {
           files.unshift({
@@ -1480,7 +1670,7 @@ function attachRoomPageEvents() {
           : groupEntriesByUploader(entries).map((group) => ({
               name: bundleDownloadName(group),
               content: combinedYaml(group.entries),
-              modifiedAt: group.entries[0]?.created_at || Date.now()
+              modifiedAt: group.entries[0] ? roomEntryTimestamp(group.entries[0]) : Date.now()
             }));
         if (state.currentMetaYaml && !roomIsSecret()) {
           bundleFiles.unshift({
@@ -2142,18 +2332,31 @@ function renderRoomPage() {
   }
 
   const isCreator = hasRoomAdminToken(room.slug);
+  const canShowTimestampControls = !roomIsSecret(room);
+  if (!canShowTimestampControls && state.roomTable.sortField === "timestamp") {
+    state.roomTable.sortField = "player";
+    state.roomTable.sortDirection = "asc";
+    state.roomTable.appliedShowTimestamps = false;
+  }
   const visibleEntries = getVisibleRoomEntries();
   const sortMarker = state.roomTable.sortDirection === "asc" ? "↑" : "↓";
   const metaYaml = state.currentMetaYaml;
   const roomDescription = String(room.description || "").trim();
-  const playerColumnLabel = state.roomTable.showDiscord && state.roomTable.sortByDiscordUsername ? "Username" : "Player";
+  const playerColumnLabel = state.roomTable.appliedShowDiscord && state.roomTable.sortByDiscordUsername ? "Username" : "Player";
+  const showTimestampColumn = canShowTimestampControls && state.roomTable.appliedShowTimestamps;
+  const actionColspan = showTimestampColumn ? 4 : 3;
+  const animatedDependentOption = state.roomTable.animatedDependentOption;
+  const roomAnimationClass = state.roomTable.roomAnimation
+    ? `room-animation-${state.roomTable.roomAnimation}`
+    : "";
 
   const tableRows = visibleEntries.length
     ? visibleEntries
         .map((entry) => {
           const displayPlayer = roomIsSecret(room) ? secretSlotName(entry) : entry.player;
           const displayGame = roomIsSecret(room) ? secretGameName(entry) : entry.game;
-          const uploaderName = state.roomTable.showDiscord ? uploaderDisplayName(entry) : "";
+          const uploaderName = state.roomTable.appliedShowDiscord ? uploaderDisplayName(entry) : "";
+          const timestamp = showTimestampColumn ? formatRoomEntryTimestamp(entry) : "";
           const actions = canAccessEntryContent(entry, room)
             ? [
                 `<button type="button" class="ghost" data-view-entry="${escapeHtml(entry.id)}">View YAML</button>`,
@@ -2166,14 +2369,15 @@ function renderRoomPage() {
 
           return `
             <tr>
-              <td>
+              <td style="view-transition-name: ${roomViewTransitionName("yaml-player", entry.id)};">
                 <div class="player-cell">
                   <span class="player-name">${escapeHtml(displayPlayer)}</span>
                   ${uploaderName ? `<span class="uploader-name">${escapeHtml(uploaderName)}</span>` : ""}
                 </div>
               </td>
-              <td>${escapeHtml(displayGame)}</td>
-              <td>
+              <td style="view-transition-name: ${roomViewTransitionName("yaml-game", entry.id)};">${escapeHtml(displayGame)}</td>
+              ${showTimestampColumn ? `<td class="timestamp-cell" style="view-transition-name: ${roomViewTransitionName("yaml-timestamp", entry.id)};">${escapeHtml(timestamp)}</td>` : ""}
+              <td style="view-transition-name: ${roomViewTransitionName("yaml-action", entry.id)};">
                 <div class="inline-row">${actions.length ? actions.join("") : '<span class="meta-copy">Private</span>'}</div>
               </td>
             </tr>
@@ -2182,7 +2386,7 @@ function renderRoomPage() {
         .join("")
     : `
       <tr>
-        <td colspan="3">No YAML entries match the current filter.</td>
+        <td colspan="${actionColspan}">No YAML entries match the current filter.</td>
       </tr>
     `;
 
@@ -2237,50 +2441,101 @@ function renderRoomPage() {
       </div>
     </section>
 
-    <section class="content-card">
+    <section class="content-card room-yamls-card ${roomAnimationClass}">
       <div class="toolbar-row room-yamls-row">
         <div class="meta-block">
           <h3
             class="room-yamls-title"
-            title="Sort by player or game using the table headers. Filter to only the YAMLs submitted by this browser."
+            title="Sort using the table headers. Open filter options to adjust the room YAML view."
           >Room YAMLs</h3>
         </div>
-        <div class="action-row room-yamls-toggles">
-          <label class="checkbox">
-            <input id="only-mine-toggle" type="checkbox">
-            <span>Display only my YAMLs</span>
-          </label>
-          <label class="checkbox">
-            <input id="show-discord-toggle" type="checkbox">
-            <span>Show Discord usernames</span>
-          </label>
-          ${
-            state.roomTable.showDiscord
-              ? `
+        <div class="room-yamls-filter">
+          <button
+            id="filter-options-toggle"
+            type="button"
+            class="secondary"
+            aria-expanded="${state.roomTable.filterOptionsOpen ? "true" : "false"}"
+            aria-controls="room-filter-options"
+          >Filter Options</button>
+          <div
+            id="room-filter-options"
+            class="filter-options ${state.roomTable.filterOptionsOpen ? "expanded" : "collapsed"}"
+            aria-hidden="${state.roomTable.filterOptionsOpen ? "false" : "true"}"
+            ${state.roomTable.filterOptionsOpen ? "" : "inert"}
+          >
+            <div class="filter-option-group">
+              <label class="checkbox">
+                <input id="only-mine-toggle" type="checkbox">
+                <span>Display only my YAMLs</span>
+              </label>
+            </div>
+            <div class="filter-option-group">
+              <label class="checkbox">
+                <input id="show-discord-toggle" type="checkbox">
+                <span>Show Discord usernames</span>
+              </label>
+              <div class="dependent-option ${state.roomTable.showDiscord ? "expanded" : "collapsed"} ${animatedDependentOption === "discord" ? "animate-dependent-option" : ""}">
                 <label class="checkbox">
-                  <input id="sort-discord-toggle" type="checkbox">
+                  <input
+                    id="sort-discord-toggle"
+                    type="checkbox"
+                    ${state.roomTable.showDiscord ? "" : "disabled"}
+                  >
                   <span>Sort by Discord username</span>
                 </label>
-              `
-              : ""
-          }
+              </div>
+            </div>
+            ${
+              canShowTimestampControls
+                ? `
+                  <div class="filter-option-group">
+                    <label class="checkbox">
+                      <input id="show-timestamps-toggle" type="checkbox">
+                      <span>Show timestamps</span>
+                    </label>
+                    <div class="dependent-option ${state.roomTable.showTimestamps ? "expanded" : "collapsed"} ${animatedDependentOption === "timestamp" ? "animate-dependent-option" : ""}">
+                      <label class="checkbox">
+                        <input
+                          id="relative-timestamps-toggle"
+                          type="checkbox"
+                          ${state.roomTable.showTimestamps ? "" : "disabled"}
+                        >
+                        <span>Relative timestamp</span>
+                      </label>
+                    </div>
+                  </div>
+                `
+                : ""
+            }
+          </div>
         </div>
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>
+              <th style="view-transition-name: room-header-player;">
                 <button type="button" class="sort-button" data-sort-field="player">
-                  ${playerColumnLabel} ${state.roomTable.sortField === "player" ? sortMarker : ""}
+                  <span class="header-label player-header-label">${playerColumnLabel} ${state.roomTable.sortField === "player" ? sortMarker : ""}</span>
                 </button>
               </th>
-              <th>
+              <th style="view-transition-name: room-header-game;">
                 <button type="button" class="sort-button" data-sort-field="game">
                   Game ${state.roomTable.sortField === "game" ? sortMarker : ""}
                 </button>
               </th>
-              <th>Action</th>
+              ${
+                showTimestampColumn
+                  ? `
+                    <th style="view-transition-name: room-header-timestamp;">
+                      <button type="button" class="sort-button" data-sort-field="timestamp">
+                        <span class="header-label">Timestamp ${state.roomTable.sortField === "timestamp" ? sortMarker : ""}</span>
+                      </button>
+                    </th>
+                  `
+                  : ""
+              }
+              <th style="view-transition-name: room-header-action;">Action</th>
             </tr>
           </thead>
           <tbody>${tableRows}</tbody>
