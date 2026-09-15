@@ -359,6 +359,12 @@ textarea {
   color: #9cc0ea;
 }
 
+.older-rooms-action {
+  display: flex;
+  justify-content: center;
+  margin-top: 1rem;
+}
+
 .badge-row,
 .action-row,
 .toolbar-row,

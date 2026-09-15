@@ -33,6 +33,8 @@ const state = {
   uploaderToken: null,
   uploaderTokenHash: null,
   myRooms: [],
+  myRoomsShowOlder: false,
+  myRoomsHasOlder: false,
   currentRoom: null,
   currentEntries: [],
   currentMetaYaml: null,
@@ -505,7 +507,13 @@ function rpc(functionName, payload) {
   });
 }
 
-async function fetchRoomsBySlugs(roomSlugs) {
+function closedOverMonthAgoCutoff() {
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - 1);
+  return cutoff.toISOString();
+}
+
+async function fetchRoomsBySlugs(roomSlugs, options = {}) {
   if (roomSlugs.length === 0) {
     return [];
   }
@@ -513,9 +521,14 @@ async function fetchRoomsBySlugs(roomSlugs) {
   const uniqueSlugs = [...new Set(roomSlugs)].map(sanitizeSlug).filter(Boolean);
   const params = new URLSearchParams({
     select: "slug,name,description,closes_at,yaml_limit,require_discord_username,secret_mode,created_at",
-    order: "closes_at.asc"
+    order: "closes_at.desc"
   });
   params.set("slug", `in.(${uniqueSlugs.join(",")})`);
+  if (options.closedBefore) {
+    params.set("closes_at", `lt.${options.closedBefore}`);
+  } else if (options.closedOnOrAfter) {
+    params.set("closes_at", `gte.${options.closedOnOrAfter}`);
+  }
   return apiFetch(`/rest/v1/rooms?${params.toString()}`);
 }
 
@@ -1328,6 +1341,16 @@ function attachRoomsPageEvents() {
   for (const button of document.querySelectorAll("[data-open-room]")) {
     button.addEventListener("click", () => navigateTo("room", button.dataset.openRoom));
   }
+
+  const showOlderButton = document.querySelector("#show-older-rooms-button");
+  if (showOlderButton) {
+    showOlderButton.addEventListener("click", async () => {
+      state.myRoomsShowOlder = true;
+      renderLoading("My Rooms");
+      await refreshMyRooms();
+      renderRoomsPage();
+    });
+  }
 }
 
 function attachCreateRoomEvents() {
@@ -2122,7 +2145,13 @@ async function handleMetaUploadSelection(files) {
 async function refreshMyRooms() {
   const [uploadedRoomSlugs] = await Promise.all([fetchMyUploadedRoomSlugs(), ensureUploaderHash()]);
   const createdRoomSlugs = listCreatedRoomSlugs();
-  const rooms = await fetchRoomsBySlugs([...createdRoomSlugs, ...uploadedRoomSlugs]);
+  const allRoomSlugs = [...new Set([...createdRoomSlugs, ...uploadedRoomSlugs])];
+  const cutoff = closedOverMonthAgoCutoff();
+  const recentRooms = await fetchRoomsBySlugs(allRoomSlugs, { closedOnOrAfter: cutoff });
+  const olderRooms = state.myRoomsShowOlder
+    ? await fetchRoomsBySlugs(allRoomSlugs, { closedBefore: cutoff })
+    : [];
+  const rooms = [...recentRooms, ...olderRooms];
 
   state.myRooms = rooms
     .map((room) => ({
@@ -2131,12 +2160,15 @@ async function refreshMyRooms() {
       isContributor: uploadedRoomSlugs.includes(room.slug)
     }))
     .sort((left, right) => {
-      const dateDiff = new Date(left.closes_at).getTime() - new Date(right.closes_at).getTime();
+      const dateDiff = new Date(right.closes_at).getTime() - new Date(left.closes_at).getTime();
       if (dateDiff !== 0) {
         return dateDiff;
       }
       return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
     });
+  state.myRoomsHasOlder = state.myRoomsShowOlder
+    ? olderRooms.length > 0
+    : recentRooms.length < allRoomSlugs.length;
 }
 
 async function loadCurrentRoom(roomSlug) {
@@ -2156,6 +2188,13 @@ async function loadCurrentRoom(roomSlug) {
 }
 
 function renderRoomsPage() {
+  const olderRoomsAction = state.myRoomsHasOlder && !state.myRoomsShowOlder
+    ? `
+        <div class="older-rooms-action">
+          <button type="button" class="secondary" id="show-older-rooms-button">View older rooms</button>
+        </div>
+      `
+    : "";
   const roomsMarkup = state.myRooms.length
     ? state.myRooms
         .map((room) => {
@@ -2201,6 +2240,7 @@ function renderRoomsPage() {
     </section>
     <section class="content-card">
       <div class="room-list">${roomsMarkup}</div>
+      ${olderRoomsAction}
     </section>
   `;
 
