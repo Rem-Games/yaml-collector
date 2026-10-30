@@ -1189,6 +1189,7 @@ function renderSidebarRoomContext() {
           ? `
             <button id="download-all-yamls" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download YAMLs</button>
             <button id="download-all-bundles" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download Bundles</button>
+            ${roomIsSecret(room) ? `<button id="download-cursed-yamls" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download Cursed UT YAMLs</button>` : ""}
           `
           : '<p class="sidebar-room-copy">Secret room downloads open for the host after closing.</p>'
       }
@@ -1676,6 +1677,29 @@ function attachRoomPageEvents() {
         showBanner(STATUS_BANNER, "All YAMLs download started.");
       } catch (error) {
         showBanner(STATUS_BANNER, error.message || "All YAMLs download failed.", true);
+      }
+    });
+  }
+
+  const downloadCursedButton = document.querySelector("#download-cursed-yamls");
+  if (downloadCursedButton) {
+    downloadCursedButton.addEventListener("click", async () => {
+      downloadCursedButton.disabled = true;
+      try {
+        if (!roomIsSecret() || !canDownloadAllRoomYamls(state.currentRoom)) {
+          throw new Error("Cursed UT downloads open for the host after a Secret room closes.");
+        }
+        const roomSlug = state.currentRoom.slug;
+        const entries = await hydrateEntryContents(state.currentEntries);
+        downloadBlob(
+          createZipBlob(cursedExportFiles(entries)),
+          `${sanitizeFilenamePart(roomSlug, "room")}-cursed-ut-yamls.zip`
+        );
+        showBanner(STATUS_BANNER, "Cursed UT YAML download started.");
+      } catch (error) {
+        showBanner(STATUS_BANNER, error.message || "Cursed UT YAML download failed.", true);
+      } finally {
+        downloadCursedButton.disabled = false;
       }
     });
   }

@@ -29,6 +29,7 @@ Before using this in production, change these Supabase settings:
 - Rejects duplicate player names inside a room unless the root `name` contains `{player}`, `{PLAYER}`, `{number}`, or `{NUMBER}`
 - Lets room creators edit the room name, closing time, per-user YAML limit, and Discord username requirement
 - Secret rooms remain cookie-bound, hide player names, game names, filenames, and YAML contents from everyone except each uploader, and only let the host download randomized, timestamp-normalized YAML exports after the room closes
+- After closing, Secret room hosts can also download a Cursed UT ZIP with one `.yaml` per player, named using the YAML's `name` field and with normalized ZIP dates. Unsafe filename characters are replaced and collisions receive numbered suffixes.
 - Lets room creators upload, replace, and remove a room-level `meta.yaml` without normal player YAML validation or upload-limit counting
 - Lets room creators delete any YAML in their room before the room closes and delete the room itself
 - Lets uploaders replace or delete only their own YAMLs, and only before the room closes
@@ -112,6 +113,16 @@ bash serve-local.sh
 5. If you change the database schema, rerun `supabase/schema.sql` in the staging Supabase project.
 
 ## Notes About Archipelago YAML
+
+### Cursed UT exports
+
+The separate **Download Cursed UT YAMLs** button preserves leading header comments, adds the UT-only warning, and removes comments from the document body by parsing it. Hash characters inside string values remain intact. Only direct options in the section named by the root `game` field are stripped; the editable list is `CURSED_UT_REMOVED_OPTIONS` in `cursed-yaml.js`.
+
+The body becomes a single line of JSON with shuffled object keys and Unicode escapes in both keys and string values. Supplementary Unicode characters (such as emoji) stay literal because Python YAML readers do not combine JSON surrogate-pair escapes. Arrays retain their order and numbers, booleans, and null retain their types. Original stored YAMLs and ordinary downloads are unaffected. The export excludes `meta.yaml` and requires string `name` and `game` fields. Invalid YAML, circular aliases, unsafe numbers, and non-JSON values fail the export with an error instead of producing a partial ZIP.
+
+Parsing uses the integrity-checked js-yaml 4.1.1 browser library from jsDelivr; access to that CDN is required for cursed downloads.
+
+### Original uploads
 
 Archipelago YAML documents are stored as raw text instead of being parsed and re-serialized. Combined uploads are split on a `---` separator line with optional blank lines around it. The room list only extracts the root `name` and `game` fields for display. That avoids breaking:
 
