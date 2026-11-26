@@ -20,6 +20,8 @@ const ROOM_SHOW_DISCORD_COOKIE = "yamlcollector_room_show_discord";
 const ROOM_SORT_DISCORD_COOKIE = "yamlcollector_room_sort_discord";
 const ROOM_SHOW_TIMESTAMPS_COOKIE = "yamlcollector_room_show_timestamps";
 const ROOM_RELATIVE_TIMESTAMPS_COOKIE = "yamlcollector_room_relative_timestamps";
+const UPLOADER_DOWNLOAD_BUNDLE_COOKIE = "yamlcollector_uploader_download_bundle";
+const UPLOADER_DOWNLOAD_META_COOKIE = "yamlcollector_uploader_download_meta";
 const API_SCHEMA = "api";
 const COMBINED_SEPARATOR = "\n\n---\n\n";
 const SECRET_EXPORT_MODIFIED_AT = "1980-01-01T00:00:00Z";
@@ -1189,6 +1191,7 @@ function renderSidebarRoomContext() {
           ? `
             <button id="download-all-yamls" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download YAMLs</button>
             <button id="download-all-bundles" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download Bundles</button>
+            ${!roomIsSecret(room) ? `<button id="download-uploader-yamls" type="button" class="secondary" ${state.currentEntries.length ? "" : "disabled"}>Download single user's YAMLs</button>` : ""}
             ${roomIsSecret(room) ? `<button id="download-cursed-yamls" type="button" class="secondary" ${hasAnyDownloadableYaml ? "" : "disabled"}>Download Cursed UT YAMLs</button>` : ""}
           `
           : '<p class="sidebar-room-copy">Secret room downloads open for the host after closing.</p>'
@@ -1648,6 +1651,11 @@ function attachRoomPageEvents() {
     button.addEventListener("click", () => openDeleteEntryModal(button.dataset.deleteEntry));
   }
 
+  const downloadUploaderButton = document.querySelector("#download-uploader-yamls");
+  if (downloadUploaderButton && !roomIsSecret()) {
+    downloadUploaderButton.addEventListener("click", openUploaderDownloadModal);
+  }
+
   const downloadAllButton = document.querySelector("#download-all-yamls");
   if (downloadAllButton) {
     downloadAllButton.addEventListener("click", async () => {
@@ -1736,6 +1744,102 @@ function attachRoomPageEvents() {
       }
     });
   }
+}
+
+function openUploaderDownloadModal() {
+  const room = state.currentRoom;
+  if (!room || roomIsSecret(room)) {
+    return;
+  }
+
+  const groups = groupEntriesByUploader(state.currentEntries);
+  showModal(
+    "Download single user's YAMLs",
+    `
+      <form id="uploader-download-form" class="modal-stack">
+        <label class="field">
+          <span>Uploader</span>
+          <select id="download-uploader" required>
+            <option value="" selected>Select uploader...</option>
+            ${groups.map((group, index) => `<option value="${index}">${escapeHtml(uploaderDisplayName(group.entries[0]))}</option>`).join("")}
+          </select>
+        </label>
+        <label class="checkbox">
+          <input id="uploader-download-bundle" type="checkbox" ${getCookie(UPLOADER_DOWNLOAD_BUNDLE_COOKIE) === "on" ? "checked" : ""}>
+          <span>Download as bundle</span>
+        </label>
+        <label class="checkbox">
+          <input id="uploader-download-meta" type="checkbox" ${getCookie(UPLOADER_DOWNLOAD_META_COOKIE) === "on" ? "checked" : ""}>
+          <span>Include meta.yaml</span>
+        </label>
+        <div class="action-row">
+          <button id="uploader-download-cancel" type="button" class="secondary">Cancel</button>
+          <button id="uploader-download-submit" type="submit" disabled>Download</button>
+        </div>
+      </form>
+    `,
+    () => {
+      const form = document.querySelector("#uploader-download-form");
+      const select = document.querySelector("#download-uploader");
+      const bundle = document.querySelector("#uploader-download-bundle");
+      const meta = document.querySelector("#uploader-download-meta");
+      const submit = document.querySelector("#uploader-download-submit");
+      let downloading = false;
+      const selectedGroup = () => select.value === "" ? null : groups[Number(select.value)];
+      select.addEventListener("change", () => {
+        submit.disabled = downloading || !selectedGroup();
+      });
+      bundle.addEventListener("change", () => setCookie(UPLOADER_DOWNLOAD_BUNDLE_COOKIE, bundle.checked ? "on" : "off"));
+      meta.addEventListener("change", () => setCookie(UPLOADER_DOWNLOAD_META_COOKIE, meta.checked ? "on" : "off"));
+      document.querySelector("#uploader-download-cancel").addEventListener("click", closeModal);
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const group = selectedGroup();
+        if (downloading || !group || roomIsSecret(room) || state.currentRoom !== room) {
+          return;
+        }
+        downloading = true;
+        submit.disabled = true;
+        const asBundle = bundle.checked;
+        const includeMeta = meta.checked && Boolean(state.currentMetaYaml);
+        const metaYaml = state.currentMetaYaml;
+        try {
+          const [entries, metaContent] = await Promise.all([
+            Promise.all(group.entries.map(async (entry) => ({ ...entry, content: await fetchEntryContent(entry.id) }))),
+            includeMeta ? fetchMetaYamlContent() : Promise.resolve(null)
+          ]);
+          if (state.currentRoom !== room || roomIsSecret(room) || !form.isConnected) {
+            return;
+          }
+          const files = asBundle
+            ? [{ name: bundleDownloadName(group), content: combinedYaml(entries), modifiedAt: roomEntryTimestamp(entries[0]) }]
+            : entries.map((entry) => ({ name: entryDownloadName(entry), content: entry.content, modifiedAt: roomEntryTimestamp(entry) }));
+          if (includeMeta) {
+            files.unshift({ name: metaYamlDownloadName(), content: metaContent, modifiedAt: metaYaml.updated_at });
+          }
+          // Keep every document extractable even when original filenames collide.
+          const usedNames = new Set();
+          for (const file of files) {
+            const originalName = file.name;
+            let suffix = 2;
+            while (usedNames.has(file.name.toLowerCase())) {
+              file.name = `${originalName.replace(/\.yaml$/i, "")}-${suffix++}.yaml`;
+            }
+            usedNames.add(file.name.toLowerCase());
+          }
+          const uploaderName = uploaderDisplayName(group.entries[0]);
+          downloadBlob(createZipBlob(files), `${sanitizeFilenamePart(room.slug, "room")}-${sanitizeFilenamePart(uploaderName, "uploader")}-yamls.zip`);
+          closeModal();
+          showBanner(STATUS_BANNER, "Uploader YAML download started.");
+        } catch (error) {
+          showBanner(STATUS_BANNER, error.message || "Uploader YAML download failed.", true);
+        } finally {
+          downloading = false;
+          submit.disabled = !selectedGroup();
+        }
+      });
+    }
+  );
 }
 
 async function openEditRoomModal() {
